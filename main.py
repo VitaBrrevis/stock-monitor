@@ -47,7 +47,56 @@ BASE_URL = 'https://www.minimx.fr/'
 
 # List of category URLs
 CATEGORY_URLS = [
-    'https://www.minimx.fr/fr/743-10-grandes-roues'
+    'https://www.minimx.fr/fr/743-10-grandes-roues',
+    'https://www.minimx.fr/fr/670-motocross-crz-erz',
+    'https://www.minimx.fr/fr/419-motocross',
+    'https://www.minimx.fr/fr/782-les-electriques',
+    'https://www.minimx.fr/fr/666-motocross-150cc',
+    'https://www.minimx.fr/fr/667-motocross-250cc',
+    'https://www.minimx.fr/fr/668-les-motocross-300cc',
+    'https://www.minimx.fr/fr/736-les-motocross-450cc',
+    'https://www.minimx.fr/fr/100-dirt-bike-pit-bike-motocross',
+    'https://www.minimx.fr/fr/476-les-mini-moto-electriques',
+    'https://www.minimx.fr/fr/136-les-50cc-70cc-88cc-enfant-et-mini-rider',
+    'https://www.minimx.fr/fr/749-les-110cc',
+    'https://www.minimx.fr/fr/133-dirt-bike-125cc-lifan-yx',
+    'https://www.minimx.fr/fr/135-dirt-bike-moteur-150cc-yx',
+    'https://www.minimx.fr/fr/533-les-dirt-bike-et-pit-bike-160cc',
+    'https://www.minimx.fr/fr/535-les-pit-bike-et-dirt-bike-190cc',
+    'https://www.minimx.fr/fr/346-les-motocross-250cc',
+    'https://www.minimx.fr/fr/629-les-motocross-300cc',
+    'https://www.minimx.fr/fr/737-les-450cc',
+    'https://www.minimx.fr/fr/3-dirt-bike-mini-mx',
+    'https://www.minimx.fr/fr/327-taille-de-roue-grande-roue-dirt-bike',
+    'https://www.minimx.fr/fr/328-dirt-bike-10-12-petites-roues',
+    'https://www.minimx.fr/fr/329-dirt-bike-12-14-taille-standard',
+    'https://www.minimx.fr/fr/330-dirt-bike-grandes-roues-14-arriere-et-17-avant',
+    'https://www.minimx.fr/fr/334-motocross-16-19-grandes-roues',
+    'https://www.minimx.fr/fr/519-motocross-18-21',
+    'https://www.minimx.fr/fr/392-vehicules-pocket-cross-et-pocket-electrique',
+    'https://www.minimx.fr/fr/306-pocket-cross-thermique',
+    'https://www.minimx.fr/fr/416-pocket-cross-electriques',
+    'https://www.minimx.fr/fr/413-les-cylindrees-de-pocket-bike-thermique-et-electrique',
+    'https://www.minimx.fr/fr/414-49cc-enfant-de-3-a-8ans',
+    'https://www.minimx.fr/fr/739-60cc-enfant-de-6-a-12ans',
+    'https://www.minimx.fr/fr/556-Pocket-Quad-Quad-Electrique-et-Quad-4-Temps',
+    'https://www.minimx.fr/fr/557-pocket-quad-2-temps-pour-enfant',
+    'https://www.minimx.fr/fr/558-quad-4-temps-pour-enfant',
+    'https://www.minimx.fr/fr/559-quad-electriques-pour-enfant',
+    'https://www.minimx.fr/fr/744-quad-adultes-a-partir-de-14-ans',
+    'https://www.minimx.fr/fr/633-draisienne-electrique-pour-enfant',
+    'https://www.minimx.fr/fr/631-voitures-electrique-pour-enfant',
+    'https://www.minimx.fr/fr/632-voiture-electrique-buggy-4x4-pour-enfant',
+    'https://www.minimx.fr/fr/649-quad-electrique-pour-enfant',
+    'https://www.minimx.fr/fr/652-voiture-electrique-pour-enfant',
+    'https://www.minimx.fr/fr/616-velo-electrique-ville-et-vtt',
+    'https://www.minimx.fr/fr/617-velo-electrique-pliant-crz',
+    'https://www.minimx.fr/fr/618-vtt-electrique',
+    'https://www.minimx.fr/fr/619-vtc-electrique',
+    'https://www.minimx.fr/fr/771-moto-dax-skyteam-homologue',
+    'https://www.minimx.fr/fr/772-thermique-a-essencemoto-dax-skyteam-thermique-50cc-et-125cc',
+    'https://www.minimx.fr/fr/773-electrique',
+    'https://www.minimx.fr/fr/778-voiture-rc-telecommande-electrique'
 ]
 
 # Directory to store CSV files and plots
@@ -291,7 +340,7 @@ def main():
     monitor_stocks()
 
     # Schedule to run every 2 hours
-    schedule.every(2).hours.do(monitor_stocks)
+    schedule.every(3).hours.do(monitor_stocks)
 
     logging.info("Starting scheduler. Script will run every 2 hours. Press Ctrl+C to stop.")
     while True:
