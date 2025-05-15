@@ -104,7 +104,6 @@ CATEGORY_URLS = [
     "https://www.minimx.fr/fr/772-thermique-a-essencemoto-dax-skyteam-thermique-50cc-et-125cc",
     "https://www.minimx.fr/fr/773-electrique",
     "https://www.minimx.fr/fr/785-pieces-detachees-dax-skyteam",
-    "https://www.minimx.fr/index.php?id_product=12584&controller=product&id_lang=2",
     "https://www.minimx.fr/fr/419-motocross",
     "https://www.minimx.fr/fr/665-motocross-par-cylindree",
     "https://www.minimx.fr/fr/670-motocross-crz-erz",
@@ -115,7 +114,6 @@ CATEGORY_URLS = [
     "https://www.minimx.fr/fr/736-les-motocross-450cc",
     "https://www.minimx.fr/fr/736-les-motocross-450cc",
     "https://www.minimx.fr/fr/669-motocross-par-marque",
-    "https://www.minimx.fr/index.php?id_product=18319&controller=product&id_lang=2",
     "https://www.minimx.fr/fr/670-motocross-crz-erz",
     "https://www.minimx.fr/fr/671-motocross-bastos",
     "https://www.minimx.fr/fr/672-motocross-mini-mx",
@@ -127,7 +125,7 @@ CATEGORY_URLS = [
     "https://www.minimx.fr/fr/777-14-17-",
     "https://www.minimx.fr/fr/675-motocross-16-arriere-19-avant",
     "https://www.minimx.fr/fr/676-motocross-18-arriere-et-21-avant",
-    "https://www.minimx.fr/index.php?id_category=672&controller=category&id_lang=2",
+    "https://www.minimx.fr/index.php?id_category=672&controller=category",
     "https://www.minimx.fr/fr/677-pieces-par-vehicule",
     "https://www.minimx.fr/fr/542-pieces-motocross-crz-erz-150cc-et-250cc",
     "https://www.minimx.fr/fr/775-erz-450cc-r",
@@ -148,7 +146,6 @@ CATEGORY_URLS = [
     "https://www.minimx.fr/fr/422-ktm-85sx",
     "https://www.minimx.fr/fr/451-ktm-125sx",
     "https://www.minimx.fr/fr/670-motocross-crz-erz",
-    "https://www.minimx.fr/index.php?id_product=12584&controller=product&id_lang=2",
     "https://www.minimx.fr/fr/100-dirt-bike-pit-bike-motocross",
     "https://www.minimx.fr/fr/137-par-puissance",
     "https://www.minimx.fr/fr/3-dirt-bike-mini-mx",
@@ -190,7 +187,6 @@ CATEGORY_URLS = [
     "https://www.minimx.fr/fr/542-pieces-motocross-crz-erz-150cc-et-250cc",
     "https://www.minimx.fr/fr/648-pieces-detachees-motocross-crz-erz-300-liquide",
     "https://www.minimx.fr/fr/605-pieces-detachees-minimx-drift-lx",
-    "https://www.minimx.fr/index.php?id_category=672&controller=category&id_lang=2",
     "https://www.minimx.fr/fr/305-pocket-bike",
     "https://www.minimx.fr/fr/392-vehicules-pocket-cross-et-pocket-electrique",
     "https://www.minimx.fr/fr/306-pocket-bike",
@@ -552,9 +548,13 @@ def get_product_links(session, category_url):
     """Extract product links from a category page, handling pagination."""
     product_links = []
     page = 1
-    while True:
+    max_pages = 20  # Safety limit to prevent infinite loops
+    previous_page_products = set()  # To detect when we're getting the same products repeatedly
+
+    while page <= max_pages:
         url = f"{category_url}?page={page}" if page > 1 else category_url
         try:
+            logging.info(f"Fetching page {page} of {category_url}")
             response = session.get(url, headers=get_headers())
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
@@ -570,6 +570,18 @@ def get_product_links(session, category_url):
                 logging.info(f"No more products found on page {page} of {category_url}")
                 break
 
+            # Check if we're on the last page by looking for pagination controls
+            pagination = soup.select_one('.pagination')
+            if pagination:
+                # If the "next" button is disabled or doesn't exist, we're on the last page
+                next_disabled = pagination.select_one('.next.disabled') or not pagination.select_one('.next')
+                if next_disabled:
+                    logging.info(f"Reached last page ({page}) for {category_url}")
+
+            # Collect product IDs from this page
+            current_page_products = set()
+            current_page_links = []
+
             for product in products:
                 href = product.get('href')
                 if href and '/fr/' in href and 'index.php' not in href:
@@ -577,17 +589,47 @@ def get_product_links(session, category_url):
                     product_id = re.search(r'/(\d+)-', href)
                     product_id = product_id.group(1) if product_id else None
                     if product_id:
-                        product_links.append({
+                        current_page_products.add(product_id)
+                        current_page_links.append({
                             'url': href,
                             'id_product': product_id,
                             'category': category_url
                         })
-            logging.info(f"Found {len(products)} products on page {page} of {category_url}")
+
+            # If we got the same products as the previous page, we're in a loop
+            if current_page_products and current_page_products == previous_page_products:
+                logging.warning(
+                    f"Detected duplicate products on page {page} of {category_url}, breaking pagination loop")
+                break
+
+            # Check if the current page has the same number of products as page 1
+            # This might indicate the site is showing page 1 content for all requested pages
+            if page > 1 and len(current_page_products) == len(previous_page_products) and all(
+                    pid in previous_page_products for pid in current_page_products):
+                logging.warning(
+                    f"Page {page} appears to contain the same products as previous page for {category_url}, stopping pagination")
+                break
+
+            # No new products found
+            if not current_page_links:
+                logging.info(f"No new products found on page {page} of {category_url}")
+                break
+
+            # Add current page products to our collection
+            product_links.extend(current_page_links)
+            previous_page_products = current_page_products
+
+            logging.info(f"Found {len(current_page_links)} products on page {page} of {category_url}")
             page += 1
             time.sleep(5)  # Increased delay to avoid server overload
         except requests.RequestException as e:
             logging.error(f"Error fetching category page {url}: {e}")
             break
+
+    if page > max_pages:
+        logging.warning(f"Reached maximum page limit ({max_pages}) for {category_url}")
+
+    logging.info(f"Total of {len(product_links)} products found for {category_url}")
     return product_links
 
 
