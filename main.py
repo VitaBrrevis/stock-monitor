@@ -846,7 +846,7 @@ def main():
     monitor_stocks()
 
     # Schedule to run every 2 hours
-    schedule.every(2).hours.do(monitor_stocks)
+    schedule.every(4).hours.do(monitor_stocks)
 
     logging.info("Starting scheduler. Script will run every 2 hours. Press Ctrl+C to stop.")
     while True:
