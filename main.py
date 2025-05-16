@@ -539,7 +539,7 @@ def create_new_csv():
     with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(
-            ['timestamp', 'id_product', 'category', 'name', 'stock_quantity', 'quantity_all_version', 'price',
+            ['timestamp', 'id_product', 'category', 'name', 'stock_quantity', 'quantity_all_versions', 'price',
              'price_without_reduction'])
     logging.info(f"Created new CSV file: {CSV_FILE}")
     return CSV_FILE
@@ -671,8 +671,8 @@ def extract_product_details(session, product):
                 # Extract key details
                 stock_quantity = product_json.get('quantity', 0)
 
-                # Extract quantity_all_version
-                quantity_all_version = product_json.get('quantity_all_version', 0)
+                # Extract quantity_all_versions
+                quantity_all_versions = product_json.get('quantity_all_versions', 0)
 
                 # Price details
                 price = product_json.get('price_amount', 0)  # Changed from 'price' to 'price_amount'
@@ -680,7 +680,7 @@ def extract_product_details(session, product):
 
                 # Logging for verification
                 logging.info(f"Product Details - ID: {product['id_product']}, URL: {product['url']}, "
-                             f"Stock: {stock_quantity}, All Versions Stock: {quantity_all_version}, Price: {price}, "
+                             f"Stock: {stock_quantity}, All Versions Stock: {quantity_all_versions}, Price: {price}, "
                              f"Price without Reduction: {price_without_reduction}")
 
                 return {
@@ -688,7 +688,7 @@ def extract_product_details(session, product):
                     'category': product['category'],  # Added category
                     'name': product['url'],  # Use product URL as name
                     'stock_quantity': stock_quantity,
-                    'quantity_all_version': quantity_all_version,  # Added quantity_all_version
+                    'quantity_all_versions': quantity_all_versions,  # Added quantity_all_versions
                     'price': price,
                     'price_without_reduction': price_without_reduction
                 }
@@ -722,7 +722,7 @@ def save_stock_data_batch(all_product_details):
             product_details['category'],
             product_details['name'],
             product_details['stock_quantity'],
-            product_details['quantity_all_version'],
+            product_details['quantity_all_versions'],
             product_details['price'],
             product_details['price_without_reduction']
         ])
@@ -758,9 +758,9 @@ def plot_stock_data(id_product):
         # Plot regular stock quantity
         plt.plot(df['timestamp'], df['stock_quantity'], marker='o', label='Current Version Stock')
 
-        # Plot quantity_all_version if it exists in the DataFrame
-        if 'quantity_all_version' in df.columns:
-            plt.plot(df['timestamp'], df['quantity_all_version'], marker='s', linestyle='--',
+        # Plot quantity_all_versions if it exists in the DataFrame
+        if 'quantity_all_versions' in df.columns:
+            plt.plot(df['timestamp'], df['quantity_all_versions'], marker='s', linestyle='--',
                      color='green', label='All Versions Stock')
 
         plt.title(f'Stock Levels for Product ID {id_product}\n{df["name"].iloc[0]}')
