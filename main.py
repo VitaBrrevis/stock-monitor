@@ -534,13 +534,14 @@ def setup_directories():
     os.makedirs(PLOT_DIR, exist_ok=True)
 
 
-def initialize_csv():
-    """Initialize a single CSV file for all products, overwriting if it exists."""
+def create_new_csv():
+    """Create a new CSV file for all products, overwriting if it exists."""
     with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(
             ['timestamp', 'id_product', 'category', 'name', 'stock_quantity', 'quantity_all_version', 'price',
              'price_without_reduction'])
+    logging.info(f"Created new CSV file: {CSV_FILE}")
     return CSV_FILE
 
 
@@ -704,22 +705,35 @@ def extract_product_details(session, product):
         return None
 
 
-def save_stock_data(product_details):
-    """Save stock data to a single CSV file."""
-    csv_file = CSV_FILE
+def save_stock_data_batch(all_product_details):
+    """Save all collected stock data to a CSV file, completely overwriting previous data."""
+    if not all_product_details:
+        logging.warning("No product details to save")
+        return
+
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    with open(csv_file, 'a', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow([
+
+    # Prepare all rows at once
+    rows = []
+    for product_details in all_product_details:
+        rows.append([
             timestamp,
             product_details['id_product'],
             product_details['category'],
             product_details['name'],
             product_details['stock_quantity'],
-            product_details['quantity_all_version'],  # Added quantity_all_version
+            product_details['quantity_all_version'],
             product_details['price'],
             product_details['price_without_reduction']
         ])
+
+    # Append to the newly created file (which already has headers)
+    with open(CSV_FILE, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        # Write all rows at once
+        writer.writerows(rows)
+
+    logging.info(f"Saved {len(rows)} product records to newly created CSV file: {CSV_FILE}")
 
 
 def plot_stock_data(id_product):
@@ -767,11 +781,24 @@ def plot_stock_data(id_product):
         logging.error(f"Error plotting stock data for Product ID {id_product}: {e}")
 
 
+def plot_all_stocks(all_product_details):
+    """Generate plots for all collected product data."""
+    # Extract unique product IDs from the collected data
+    product_ids = set(item['id_product'] for item in all_product_details)
+
+    logging.info(f"Generating plots for {len(product_ids)} products")
+
+    # Plot each unique product
+    for product_id in product_ids:
+        plot_stock_data(product_id)
+
+
 def monitor_stocks():
     """Main function to monitor stock levels."""
     logging.info("Starting monitor_stocks...")
     setup_directories()
-    initialize_csv()
+
+    # Только создаем директории, но не очищаем файл на этом этапе
     logging.info("Directories created: stock_data, stock_plots")
 
     # Create session
@@ -785,7 +812,8 @@ def monitor_stocks():
         return
     logging.info(f"Collected {len(products)} products")
 
-    # Process each product
+    # Collect all product details first
+    all_product_details = []
     for product in products:
         logging.info(f"Processing product: {product['id_product']}")
 
@@ -793,14 +821,23 @@ def monitor_stocks():
         product_details = extract_product_details(session, product)
 
         if product_details:
-            # Save stock data
-            save_stock_data(product_details)
-
-            # Generate plot
-            plot_stock_data(product_details['id_product'])
+            # Add to collection instead of saving immediately
+            all_product_details.append(product_details)
 
         # Delay between products to avoid overwhelming server
         time.sleep(5)
+
+    # Save all collected data, overwriting the previous file
+    logging.info(f"Collecting complete. Creating new CSV file and saving {len(all_product_details)} product details")
+
+    # Только сейчас создаем новый CSV файл (перезаписываем существующий)
+    create_new_csv()
+
+    # Записываем все собранные данные
+    save_stock_data_batch(all_product_details)
+
+    # Generate plots for all products
+    plot_all_stocks(all_product_details)
 
 
 def main():
