@@ -57,10 +57,11 @@ PLOT_DIR = 'stock_plots'
 
 
 def get_dated_filename():
-    """Create filename with current date for CSV and plot directory."""
+    """Create filename with current date and time for CSV and plot directory."""
     current_date = datetime.now().strftime('%Y-%m-%d')
-    csv_file = os.path.join(DATA_DIR, f'stock_data_{current_date}.csv')
-    plot_subdir = os.path.join(PLOT_DIR, current_date)
+    current_time = datetime.now().strftime('%H-%M-%S')
+    csv_file = os.path.join(DATA_DIR, f'stock_data_{current_date}_{current_time}.csv')
+    plot_subdir = os.path.join(PLOT_DIR, f'{current_date}_{current_time}')
     return csv_file, plot_subdir
 
 
@@ -75,7 +76,7 @@ def setup_directories():
 
 
 def create_new_csv():
-    """Create a new CSV file for all products with current date in name."""
+    """Create a new CSV file for all products with current date and time in name."""
     csv_file, _ = get_dated_filename()
     with open(csv_file, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
@@ -282,7 +283,7 @@ def plot_stock_data(id_product):
     """Generate a line plot of stock levels over time for all dates."""
     # Get list of all CSV files
     csv_files = [os.path.join(DATA_DIR, f) for f in os.listdir(DATA_DIR) if
-                 f.startswith('stock_data_') and f.endswith('.csv')]
+                 f.startswith('stock_data_') and f.endswith('.csv') and f != 'stock_data_master.csv']
 
     if not csv_files:
         logging.warning(f"No data files found to plot for Product ID: {id_product}")
@@ -336,10 +337,11 @@ def plot_stock_data(id_product):
     plt.legend()
     plt.tight_layout()
 
-    # Save plot with date in filename
+    # Save plot with date and time in filename
     _, plot_subdir = get_dated_filename()
     safe_id = re.sub(r'[^\w\-]', '_', str(id_product))[:100]
-    plot_file = os.path.join(plot_subdir, f'{safe_id}_stock_plot.png')
+    current_time = datetime.now().strftime('%H-%M-%S')
+    plot_file = os.path.join(plot_subdir, f'{safe_id}_stock_plot_{current_time}.png')
     plt.savefig(plot_file)
     plt.close()
     logging.info(f"Plot saved: {plot_file}")
@@ -405,11 +407,12 @@ def monitor_stocks():
 
 def create_master_csv():
     """Combine all daily CSV files into a master file."""
-    master_file = os.path.join(DATA_DIR, 'stock_data_master.csv')
+    current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    master_file = os.path.join(DATA_DIR, f'stock_data_master_{current_time}.csv')
 
     # Get list of all daily CSV files
     csv_files = [os.path.join(DATA_DIR, f) for f in os.listdir(DATA_DIR)
-                 if f.startswith('stock_data_') and f.endswith('.csv') and f != 'stock_data_master.csv']
+                 if f.startswith('stock_data_') and f.endswith('.csv') and not f.startswith('stock_data_master_')]
 
     if not csv_files:
         logging.warning("No daily CSV files found to create master file")
@@ -440,13 +443,11 @@ def create_master_csv():
 
 def main():
     """Schedule the stock monitoring task."""
-    # Run immediately
     monitor_stocks()
 
-    # Schedule to run once per day at 02:00 AM
-    schedule.every().day.at("02:00").do(monitor_stocks)
+    schedule.every(5).hours.do(monitor_stocks)
 
-    logging.info("Starting scheduler. Script will run daily at 02:00 AM. Press Ctrl+C to stop.")
+    logging.info("Starting scheduler. Script will run every 15 minutes. Press Ctrl+C to stop.")
     while True:
         schedule.run_pending()
         time.sleep(60)
