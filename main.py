@@ -13,6 +13,7 @@ import json
 import random
 import threading
 from concurrent.futures import ThreadPoolExecutor
+import glob
 
 # Configure logging to both console and file
 logging.basicConfig(
@@ -60,6 +61,9 @@ current_files = {
 # Lock for thread-safe file operations
 file_lock = threading.Lock()
 
+# File retention period in days
+FILE_RETENTION_DAYS = 7
+
 
 def get_headers():
     """Generate headers to mimic a browser."""
@@ -79,79 +83,168 @@ def setup_directories():
     os.makedirs(PLOT_DIR, exist_ok=True)
 
 
+def find_existing_file(scheduler_type):
+    """Find existing file for scheduler type that is less than FILE_RETENTION_DAYS old."""
+    pattern = os.path.join(DATA_DIR, f'{scheduler_type}-*.csv')
+    existing_files = glob.glob(pattern)
+
+    if not existing_files:
+        return None
+
+    current_date = datetime.now().date()
+    valid_files = []
+
+    for file_path in existing_files:
+        # Extract date from filename
+        filename = os.path.basename(file_path)
+        # Pattern: scheduler_type-YYYY-MM-DD.csv
+        date_match = re.search(r'-(\d{4}-\d{2}-\d{2})\.csv$', filename)
+
+        if date_match:
+            try:
+                file_date = datetime.strptime(date_match.group(1), '%Y-%m-%d').date()
+                days_old = (current_date - file_date).days
+
+                if days_old < FILE_RETENTION_DAYS:
+                    valid_files.append({
+                        'path': file_path,
+                        'date': file_date,
+                        'days_old': days_old
+                    })
+                    logging.info(f"Found valid existing file: {filename} (age: {days_old} days)")
+            except ValueError:
+                logging.warning(f"Could not parse date from filename: {filename}")
+
+    if valid_files:
+        # Return the most recent valid file
+        most_recent = max(valid_files, key=lambda x: x['date'])
+        logging.info(
+            f"Using most recent valid file: {os.path.basename(most_recent['path'])} (age: {most_recent['days_old']} days)")
+        return most_recent['path'], most_recent['date']
+
+    return None
+
+
+def create_new_file(scheduler_type):
+    """Create a new CSV file with headers."""
+    current_date = datetime.now().date()
+    date_str = current_date.strftime('%Y-%m-%d')
+    filename = os.path.join(DATA_DIR, f'{scheduler_type}-{date_str}.csv')
+
+    with open(filename, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        # Write column descriptions
+        writer.writerow([
+            '# Column Descriptions:'
+        ])
+        writer.writerow([
+            '# timestamp - Date and time of data collection'
+        ])
+        writer.writerow([
+            '# id_product - Unique product identifier'
+        ])
+        writer.writerow([
+            '# reference - Product reference/SKU code'
+        ])
+        writer.writerow([
+            '# meta_title - Product page title'
+        ])
+        writer.writerow([
+            '# url - Direct link to product page'
+        ])
+        writer.writerow([
+            '# category_url - Category page URL where product was found'
+        ])
+        writer.writerow([
+            '# price_without_reduction - Original price before discount'
+        ])
+        writer.writerow([
+            '# discount_amount - Amount of discount applied'
+        ])
+        writer.writerow([
+            '# price - Final price after discount'
+        ])
+        writer.writerow([
+            '# available_date - Product availability date'
+        ])
+        writer.writerow([
+            '# stock_quantity - Stock quantity for current version'
+        ])
+        writer.writerow([
+            '# quantity_all_versions - Total stock across all versions'
+        ])
+        writer.writerow([])  # Empty line
+
+        # Write actual headers
+        writer.writerow([
+            'timestamp', 'id_product', 'reference', 'meta_title', 'url', 'category_url',
+            'price_without_reduction', 'discount_amount', 'price', 'available_date',
+            'stock_quantity', 'quantity_all_versions'
+        ])
+
+    logging.info(f"Created new {scheduler_type} CSV file: {filename}")
+    return filename, current_date
+
+
 def get_scheduler_filename(scheduler_type):
-    """Get or create filename for specific scheduler type. Files are created daily if they don't exist, otherwise data is appended."""
+    """Get or create filename for specific scheduler type. Uses existing files if they are less than FILE_RETENTION_DAYS old."""
     with file_lock:
-        current_date = datetime.now().date()
+        # Check if we already have a valid file in memory
+        if (current_files[scheduler_type]['file'] is not None and
+                current_files[scheduler_type]['file_date'] is not None):
 
-        # Check if we need a new file (if the date has changed or no file exists)
-        if (current_files[scheduler_type]['file'] is None or
-                current_files[scheduler_type]['file_date'] != current_date):
+            current_date = datetime.now().date()
+            file_date = current_files[scheduler_type]['file_date']
+            days_old = (current_date - file_date).days
 
-            # Generate new filename based on current date
-            date_str = current_date.strftime('%Y-%m-%d')
-            filename = os.path.join(DATA_DIR, f'{scheduler_type}-{date_str}.csv')
+            # If the file in memory is still valid and exists on disk, use it
+            if (days_old < FILE_RETENTION_DAYS and
+                    os.path.exists(current_files[scheduler_type]['file'])):
+                return current_files[scheduler_type]['file']
 
-            # If the file doesn't exist, create it with headers
-            if not os.path.exists(filename):
-                with open(filename, 'w', newline='', encoding='utf-8') as f:
-                    writer = csv.writer(f)
-                    # Write column descriptions
-                    writer.writerow([
-                        '# Column Descriptions:'
-                    ])
-                    writer.writerow([
-                        '# timestamp - Date and time of data collection'
-                    ])
-                    writer.writerow([
-                        '# id_product - Unique product identifier'
-                    ])
-                    writer.writerow([
-                        '# reference - Product reference/SKU code'
-                    ])
-                    writer.writerow([
-                        '# meta_title - Product page title'
-                    ])
-                    writer.writerow([
-                        '# url - Direct link to product page'
-                    ])
-                    writer.writerow([
-                        '# category_url - Category page URL where product was found'
-                    ])
-                    writer.writerow([
-                        '# price_without_reduction - Original price before discount'
-                    ])
-                    writer.writerow([
-                        '# discount_amount - Amount of discount applied'
-                    ])
-                    writer.writerow([
-                        '# price - Final price after discount'
-                    ])
-                    writer.writerow([
-                        '# available_date - Product availability date'
-                    ])
-                    writer.writerow([
-                        '# stock_quantity - Stock quantity for current version'
-                    ])
-                    writer.writerow([
-                        '# quantity_all_versions - Total stock across all versions'
-                    ])
-                    writer.writerow([])  # Empty line
+        # Try to find existing valid file
+        existing_file_info = find_existing_file(scheduler_type)
 
-                    # Write actual headers
-                    writer.writerow([
-                        'timestamp', 'id_product', 'reference', 'meta_title', 'url', 'category_url',
-                        'price_without_reduction', 'discount_amount', 'price', 'available_date',
-                        'stock_quantity', 'quantity_all_versions'
-                    ])
-                logging.info(f"Created new {scheduler_type} CSV file: {filename}")
-            else:
-                logging.info(f"Using existing {scheduler_type} CSV file for today: {filename}. Appending data.")
-
+        if existing_file_info:
+            filename, file_date = existing_file_info
             current_files[scheduler_type]['file'] = filename
-            current_files[scheduler_type]['file_date'] = current_date
+            current_files[scheduler_type]['file_date'] = file_date
+            logging.info(f"Using existing {scheduler_type} CSV file: {filename}. Appending data.")
+            return filename
 
-        return current_files[scheduler_type]['file']
+        # No valid existing file found, create new one
+        filename, file_date = create_new_file(scheduler_type)
+        current_files[scheduler_type]['file'] = filename
+        current_files[scheduler_type]['file_date'] = file_date
+
+        return filename
+
+
+def cleanup_old_files():
+    """Clean up files older than FILE_RETENTION_DAYS."""
+    current_date = datetime.now().date()
+
+    for scheduler_type in ['3hour', '24hour']:
+        pattern = os.path.join(DATA_DIR, f'{scheduler_type}-*.csv')
+        existing_files = glob.glob(pattern)
+
+        for file_path in existing_files:
+            filename = os.path.basename(file_path)
+            date_match = re.search(r'-(\d{4}-\d{2}-\d{2})\.csv$', filename)
+
+            if date_match:
+                try:
+                    file_date = datetime.strptime(date_match.group(1), '%Y-%m-%d').date()
+                    days_old = (current_date - file_date).days
+
+                    if days_old >= FILE_RETENTION_DAYS:
+                        try:
+                            os.remove(file_path)
+                            logging.info(f"Cleaned up old file: {filename} (age: {days_old} days)")
+                        except OSError as e:
+                            logging.error(f"Failed to remove old file {filename}: {e}")
+                except ValueError:
+                    logging.warning(f"Could not parse date from filename for cleanup: {filename}")
 
 
 def get_product_links(session, category_url):
@@ -463,10 +556,15 @@ def main():
     """Main function to start parallel schedulers."""
     setup_directories()
 
+    # Clean up old files on startup
+    logging.info(f"Cleaning up files older than {FILE_RETENTION_DAYS} days...")
+    cleanup_old_files()
+
     logging.info("Starting parallel stock monitoring with multiple schedulers...")
     logging.info("3-hour scheduler: monitoring motocross categories")
     logging.info("24-hour scheduler: monitoring electric categories")
-    logging.info("New files will be created daily for each scheduler, and data will be appended to them.")
+    logging.info(
+        f"Files will be reused if they are less than {FILE_RETENTION_DAYS} days old, otherwise new files will be created.")
 
     # Create thread pool for parallel execution
     with ThreadPoolExecutor(max_workers=2) as executor:
