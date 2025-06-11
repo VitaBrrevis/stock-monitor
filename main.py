@@ -594,7 +594,8 @@ CATEGORY_URLS = [
     'https://www.minimx.fr/plateau-d-allumage-dirt-bike/290-allumage-rotor-interne-dirt-bike-3700944410435.html',
 ]
 
-# Output file
+# Directory and output file
+DATA_DIR = 'stock_data'
 DATA_FILE = 'stock_data/products_data.csv'
 
 
@@ -607,21 +608,28 @@ def round_float(value, decimals=2):
 
 
 def get_headers():
+    """Generate headers to mimic a browser."""
     return {
         'User-Agent': random.choice(USER_AGENTS),
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
         'Connection': 'keep-alive',
-        'Referer': BASE_URL,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': 'https://www.minimx.fr/',
     }
 
 
+def setup_directories():
+    """Create directories for data if they don't exist."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+
 def get_product_links(session, category_url):
-    """Get all product links from a category with pagination"""
+    """Extract product links from a category page, handling pagination."""
     product_links = []
     page = 1
     max_pages = 20
-    previous_products = set()
+    previous_page_products = set()
 
     while page <= max_pages:
         url = f"{category_url}?page={page}" if page > 1 else category_url
@@ -631,140 +639,188 @@ def get_product_links(session, category_url):
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            products = soup.select('#products a.product-thumbnail')
-            if not products:
+            products_container = soup.select_one('#products')
+            if not products_container:
+                logging.info(f"No products container found on page {page} of {category_url}")
                 break
 
-            current_products = set()
+            products = products_container.select('a.product-thumbnail')
+            if not products:
+                logging.info(f"No more products found on page {page} of {category_url}")
+                break
+
+            pagination = soup.select_one('.pagination')
+            if pagination:
+                next_disabled = pagination.select_one('.next.disabled') or not pagination.select_one('.next')
+                if next_disabled:
+                    logging.info(f"Reached last page ({page}) for {category_url}")
+
+            current_page_products = set()
+            current_page_links = []
+
             for product in products:
                 href = product.get('href')
-                if href and '/fr/' in href:
+                if href and '/fr/' in href and 'index.php' not in href:
                     product_id = re.search(r'/(\d+)-', href)
+                    product_id = product_id.group(1) if product_id else None
                     if product_id:
-                        product_id = product_id.group(1)
-                        current_products.add(product_id)
-                        product_links.append({
+                        current_page_products.add(product_id)
+                        current_page_links.append({
                             'url': href,
                             'id_product': product_id,
                             'category_url': category_url
                         })
 
-            if current_products == previous_products:
+            if current_page_products and current_page_products == previous_page_products:
+                logging.warning(
+                    f"Detected duplicate products on page {page} of {category_url}, breaking pagination loop")
                 break
 
-            previous_products = current_products
+            if page > 1 and len(current_page_products) == len(previous_page_products) and all(
+                    pid in previous_page_products for pid in current_page_products):
+                logging.warning(
+                    f"Page {page} appears to contain the same products as previous page for {category_url}, stopping pagination")
+                break
+
+            if not current_page_links:
+                logging.info(f"No new products found on page {page} of {category_url}")
+                break
+
+            product_links.extend(current_page_links)
+            previous_page_products = current_page_products
+
+            logging.info(f"Found {len(current_page_links)} products on page {page} of {category_url}")
             page += 1
-            time.sleep(2)
-        except Exception as e:
-            logging.error(f"Error fetching {url}: {e}")
+            time.sleep(3)
+        except requests.RequestException as e:
+            logging.error(f"Error fetching category page {url}: {e}")
             break
 
+    if page > max_pages:
+        logging.warning(f"Reached maximum page limit ({max_pages}) for {category_url}")
+
+    logging.info(f"Total of {len(product_links)} products found for {category_url}")
     return product_links
 
 
 def get_all_products(session):
-    """Get all products from all categories"""
+    """Get all product links by scanning category pages."""
     all_products = []
     for category_url in CATEGORY_URLS:
+        logging.info(f"Scraping category: {category_url}")
         products = get_product_links(session, category_url)
         all_products.extend(products)
         time.sleep(3)
 
-    # Remove duplicates
-    seen = set()
+    # Remove duplicates based on product ID
+    seen_ids = set()
     unique_products = []
-    for p in all_products:
-        if p['id_product'] not in seen:
-            seen.add(p['id_product'])
-            unique_products.append(p)
+    for product in all_products:
+        if product['id_product'] not in seen_ids:
+            unique_products.append(product)
+            seen_ids.add(product['id_product'])
 
+    logging.info(f"Total unique products found: {len(unique_products)}")
     return unique_products
 
 
 def extract_product_details(session, product):
-    """Extract detailed product info"""
+    """Extract detailed product information from product page."""
     try:
         response = session.get(product['url'], headers=get_headers())
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Initialize defaults
-        details = {
+        # Initialize default values
+        reference = ""
+        meta_title = ""
+        price_without_reduction = 0
+        discount_amount = 0
+        price = 0
+        available_date = ""
+        stock_quantity = 0
+        quantity_all_versions = 0
+
+        # Extract meta title from page title
+        title_tag = soup.find('title')
+        if title_tag:
+            meta_title = title_tag.get_text(strip=True)
+
+        # Try to extract product details from JSON data
+        product_details_elem = soup.select_one('#product-details')
+        if product_details_elem and 'data-product' in product_details_elem.attrs:
+            try:
+                product_json = json.loads(product_details_elem['data-product'])
+
+                reference = product_json.get('reference', '')
+                stock_quantity = product_json.get('quantity', 0)
+                quantity_all_versions = product_json.get('quantity_all_versions', 0)
+                price = product_json.get('price_amount', 0)
+                price_without_reduction = product_json.get('price_without_reduction', price)
+
+                if price_without_reduction and price:
+                    discount_amount = float(price_without_reduction) - float(price)
+                else:
+                    discount_amount = 0
+
+                available_date = product_json.get('available_date', '')
+
+            except (json.JSONDecodeError, KeyError) as json_err:
+                logging.error(f"Error parsing product JSON for {product['url']}: {json_err}")
+
+        # Alternative extraction methods if JSON parsing fails
+        if not reference:
+            ref_elem = soup.select_one('[data-product-reference]')
+            if ref_elem:
+                reference = ref_elem.get('data-product-reference', '')
+            else:
+                ref_patterns = [
+                    soup.select_one('.product-reference'),
+                    soup.select_one('.reference'),
+                    soup.select_one('[class*="reference"]')
+                ]
+                for elem in ref_patterns:
+                    if elem:
+                        reference = elem.get_text(strip=True).replace('Référence:', '').strip()
+                        break
+
+        if not price:
+            price_elem = soup.select_one('.price, .current-price, [class*="price"]')
+            if price_elem:
+                price_text = price_elem.get_text(strip=True)
+                price_match = re.search(r'[\d,]+\.?\d*', price_text.replace(',', '.'))
+                if price_match:
+                    price = float(price_match.group())
+
+        if not price_without_reduction:
+            original_price_elem = soup.select_one('.regular-price, .old-price, [class*="original"]')
+            if original_price_elem:
+                price_text = original_price_elem.get_text(strip=True)
+                price_match = re.search(r'[\d,]+\.?\d*', price_text.replace(',', '.'))
+                if price_match:
+                    price_without_reduction = float(price_match.group())
+            else:
+                price_without_reduction = price
+
+        if price_without_reduction and price and not discount_amount:
+            discount_amount = float(price_without_reduction) - float(price)
+
+        return {
             'id_product': product['id_product'],
-            'reference': '',
-            'meta_title': '',
+            'reference': reference,
+            'meta_title': meta_title,
             'url': product['url'],
             'category_url': product['category_url'],
-            'price_without_reduction': 0.0,
-            'discount_amount': 0.0,
-            'price': 0.0,
-            'available_date': '',
-            'stock_quantity': 0,
-            'quantity_all_versions': 0
+            'price_without_reduction': round_float(price_without_reduction),
+            'discount_amount': round_float(discount_amount),
+            'price': round_float(price),
+            'available_date': available_date,
+            'stock_quantity': int(stock_quantity),
+            'quantity_all_versions': int(quantity_all_versions)
         }
 
-        # Try to get data from JSON first
-        product_json = soup.select_one('#product-details[data-product]')
-        if product_json:
-            try:
-                data = json.loads(product_json['data-product'])
-                price_without_reduction = round_float(data.get('price_without_reduction', 0))
-                price_amount = round_float(data.get('price_amount', 0))
-                discount_amount = round_float(price_without_reduction - price_amount)
-
-                details.update({
-                    'reference': data.get('reference', ''),
-                    'meta_title': soup.title.get_text(strip=True) if soup.title else '',
-                    'price_without_reduction': price_without_reduction,
-                    'price': price_amount,
-                    'discount_amount': discount_amount,
-                    'available_date': data.get('available_date', ''),
-                    'stock_quantity': int(data.get('quantity', 0)),
-                    'quantity_all_versions': int(data.get('quantity_all_versions', 0))
-                })
-                return details
-            except Exception as e:
-                logging.error(f"Error parsing JSON for {product['url']}: {e}")
-
-        # Fallback to HTML parsing
-        details['meta_title'] = soup.title.get_text(strip=True) if soup.title else ''
-
-        # Reference
-        ref_elem = soup.select_one('[data-product-reference], .product-reference, .reference')
-        if ref_elem:
-            details['reference'] = ref_elem.get('data-product-reference', ref_elem.get_text(strip=True))
-
-        # Prices
-        price_elem = soup.select_one('.current-price, .price')
-        if price_elem:
-            price_text = price_elem.get_text(strip=True)
-            price_match = re.search(r'[\d,]+', price_text.replace(',', '.'))
-            if price_match:
-                details['price'] = round_float(price_match.group())
-
-        original_price_elem = soup.select_one('.regular-price, .old-price')
-        if original_price_elem:
-            price_text = original_price_elem.get_text(strip=True)
-            price_match = re.search(r'[\d,]+', price_text.replace(',', '.'))
-            if price_match:
-                details['price_without_reduction'] = round_float(price_match.group())
-        else:
-            details['price_without_reduction'] = details['price']
-
-        details['discount_amount'] = round_float(details['price_without_reduction'] - details['price'])
-
-        # Stock
-        stock_elem = soup.select_one('.product-quantities, .stock')
-        if stock_elem:
-            stock_text = stock_elem.get_text(strip=True)
-            stock_match = re.search(r'\d+', stock_text)
-            if stock_match:
-                details['stock_quantity'] = int(stock_match.group())
-
-        return details
-
-    except Exception as e:
-        logging.error(f"Error extracting details for {product['url']}: {e}")
+    except requests.RequestException as e:
+        logging.error(f"Error fetching product details for {product['url']}: {e}")
         return None
 
 
@@ -774,9 +830,43 @@ def load_previous_data():
         return None
 
     try:
+        # Read the file and find the current products section
         with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            return list(reader)
+            lines = f.readlines()
+
+        # Find the start of current products data
+        start_idx = None
+        for i, line in enumerate(lines):
+            if line.strip() == '=== CURRENT PRODUCTS ===':
+                start_idx = i + 1  # Skip the header line
+                break
+
+        if start_idx is None:
+            return None
+
+        # Find the end of current products data
+        end_idx = None
+        for i in range(start_idx + 1, len(lines)):
+            if lines[i].strip() == '' or lines[i].strip().startswith('==='):
+                end_idx = i
+                break
+
+        if end_idx is None:
+            end_idx = len(lines)
+
+        # Parse the CSV data
+        csv_lines = lines[start_idx:end_idx]
+        if len(csv_lines) < 2:  # Need at least header and one data row
+            return None
+
+        # Create a temporary file-like object for CSV reader
+        import io
+        csv_content = ''.join(csv_lines)
+        csv_file = io.StringIO(csv_content)
+
+        reader = csv.DictReader(csv_file)
+        return list(reader)
+
     except Exception as e:
         logging.error(f"Error loading previous data: {e}")
         return None
@@ -829,17 +919,18 @@ def save_data(current_products, changes):
                 'stock_quantity', 'quantity_all_versions'
             ])
 
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             for p in current_products:
                 writer.writerow([
-                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    timestamp,
                     p['id_product'],
                     p['reference'],
                     p['meta_title'],
                     p['url'],
                     p['category_url'],
-                    round_float(p['price_without_reduction']),
-                    round_float(p['discount_amount']),
-                    round_float(p['price']),
+                    p['price_without_reduction'],
+                    p['discount_amount'],
+                    p['price'],
                     p['available_date'],
                     p['stock_quantity'],
                     p['quantity_all_versions']
@@ -859,8 +950,8 @@ def save_data(current_products, changes):
                         change['timestamp'],
                         change['id_product'],
                         change['reference'],
-                        round_float(change['price']),
-                        round_float(change['previous_price']),
+                        change['price'],
+                        change['previous_price'],
                         change['price_change'],
                         change['stock_quantity'],
                         change['previous_stock'],
@@ -880,38 +971,50 @@ def daily_monitor():
 
     session = requests.Session()
 
-    # Get all products
+    # Get all products using the robust logic from the first code
     products = get_all_products(session)
     if not products:
         logging.error("No products found!")
         return
 
-    # Extract details
+    logging.info(f"Found {len(products)} unique products to process")
+
+    # Extract details for all products
     current_products = []
     for product in products:
+        logging.info(f"Processing product: {product['id_product']}")
         details = extract_product_details(session, product)
         if details:
             current_products.append(details)
-        time.sleep(1)
+        time.sleep(2)  # Be nice to the server
+
+    logging.info(f"Successfully processed {len(current_products)} products")
 
     # Load previous data and compare
     previous_data = load_previous_data()
     changes = compare_products(current_products, previous_data)
 
+    if changes:
+        logging.info(f"Detected {len(changes)} changes from previous run")
+    else:
+        logging.info("No changes detected from previous run")
+
     # Save new data
     save_data(current_products, changes)
 
-    logging.info("Daily monitoring completed")
+    logging.info("Daily monitoring completed successfully")
 
 
 def main():
     """Main function"""
+    setup_directories()
     logging.info("Starting product monitor")
 
     # Run immediately and then daily
     daily_monitor()
     schedule.every().day.at("00:00").do(daily_monitor)
 
+    logging.info("Scheduler set up. Running daily at 00:00")
     while True:
         schedule.run_pending()
         time.sleep(3600)  # Check every hour
@@ -924,3 +1027,4 @@ if __name__ == '__main__':
         logging.info("Script stopped by user")
     except Exception as e:
         logging.error(f"Fatal error: {e}")
+        raise
