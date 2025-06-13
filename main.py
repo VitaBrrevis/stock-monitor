@@ -2,7 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import schedule
 import pandas as pd
@@ -10,6 +10,7 @@ import logging
 import re
 import json
 import random
+import glob
 
 # Configure logging
 logging.basicConfig(
@@ -594,9 +595,11 @@ CATEGORY_URLS = [
     'https://www.minimx.fr/plateau-d-allumage-dirt-bike/290-allumage-rotor-interne-dirt-bike-3700944410435.html',
 ]
 
-# Directory and output file
+CATEGORY_URLS = list(set(CATEGORY_URLS))
+
+# Directory and output files
 DATA_DIR = 'stock_data'
-DATA_FILE = 'stock_data/products_data.csv'
+CHANGES_LOG_FILE = 'stock_data/changes_log.csv'
 
 
 def round_float(value, decimals=2):
@@ -622,6 +625,12 @@ def get_headers():
 def setup_directories():
     """Create directories for data if they don't exist."""
     os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def get_timestamped_filename():
+    """Get filename with timestamp for products data"""
+    now = datetime.now()
+    return f"stock_data/{now.strftime('%Y-%m-%d_%H-%M')}.csv"
 
 
 def get_product_links(session, category_url):
@@ -825,50 +834,22 @@ def extract_product_details(session, product):
 
 
 def load_previous_data():
-    """Load previous data from file if exists"""
-    if not os.path.exists(DATA_FILE):
+    """Load previous data from the most recent file"""
+    # Find all products files
+    product_files = glob.glob(os.path.join(DATA_DIR, 'products_*.csv'))
+    if not product_files:
         return None
 
+    # Sort files by datetime in filename (newest first)
+    product_files.sort(reverse=True)
+    latest_file = product_files[0]
+
     try:
-        # Read the file and find the current products section
-        with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-
-        # Find the start of current products data
-        start_idx = None
-        for i, line in enumerate(lines):
-            if line.strip() == '=== CURRENT PRODUCTS ===':
-                start_idx = i + 1  # Skip the header line
-                break
-
-        if start_idx is None:
-            return None
-
-        # Find the end of current products data
-        end_idx = None
-        for i in range(start_idx + 1, len(lines)):
-            if lines[i].strip() == '' or lines[i].strip().startswith('==='):
-                end_idx = i
-                break
-
-        if end_idx is None:
-            end_idx = len(lines)
-
-        # Parse the CSV data
-        csv_lines = lines[start_idx:end_idx]
-        if len(csv_lines) < 2:  # Need at least header and one data row
-            return None
-
-        # Create a temporary file-like object for CSV reader
-        import io
-        csv_content = ''.join(csv_lines)
-        csv_file = io.StringIO(csv_content)
-
-        reader = csv.DictReader(csv_file)
-        return list(reader)
-
+        with open(latest_file, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            return list(reader)
     except Exception as e:
-        logging.error(f"Error loading previous data: {e}")
+        logging.error(f"Error loading previous data from {latest_file}: {e}")
         return None
 
 
@@ -906,72 +887,106 @@ def compare_products(current, previous):
     return changes
 
 
-def save_data(current_products, changes):
-    """Save data to file with current products and changes"""
+def save_current_data(current_products):
+    """Save current products to timestamped file"""
+    timestamped_file = get_timestamped_filename()
+
     try:
-        with open(DATA_FILE, 'w', newline='', encoding='utf-8') as f:
-            # Write current products
+        with open(timestamped_file, 'w', newline='', encoding='utf-8') as f:
+            if current_products:
+                writer = csv.DictWriter(f, fieldnames=[
+                    'timestamp', 'id_product', 'reference', 'meta_title', 'url', 'category_url',
+                    'price_without_reduction', 'discount_amount', 'price', 'available_date',
+                    'stock_quantity', 'quantity_all_versions'
+                ])
+                writer.writeheader()
+
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                for product in current_products:
+                    product_data = product.copy()
+                    product_data['timestamp'] = timestamp
+                    writer.writerow(product_data)
+
+        logging.info(f"Saved {len(current_products)} products to {timestamped_file}")
+
+    except Exception as e:
+        logging.error(f"Error saving current data: {e}")
+
+
+def save_changes_log(changes):
+    """Append changes to the unified changes log file"""
+    if not changes:
+        return
+
+    # Check if file exists to determine if we need to write header
+    file_exists = os.path.exists(CHANGES_LOG_FILE)
+
+    try:
+        with open(CHANGES_LOG_FILE, 'a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['=== CURRENT PRODUCTS ==='])
+
+            # Write separator and timestamp header
+            if file_exists:
+                writer.writerow([])  # Empty line for separation
+
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            writer.writerow([f'=== CHANGES DETECTED AT {current_time} ==='])
+
+            # Write column headers
             writer.writerow([
-                'timestamp', 'id_product', 'reference', 'meta_title', 'url', 'category_url',
-                'price_without_reduction', 'discount_amount', 'price', 'available_date',
-                'stock_quantity', 'quantity_all_versions'
+                'timestamp', 'id_product', 'reference',
+                'price', 'previous_price', 'price_change',
+                'stock_quantity', 'previous_stock', 'stock_change'
             ])
 
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            for p in current_products:
+            # Write changes data
+            for change in changes:
                 writer.writerow([
-                    timestamp,
-                    p['id_product'],
-                    p['reference'],
-                    p['meta_title'],
-                    p['url'],
-                    p['category_url'],
-                    p['price_without_reduction'],
-                    p['discount_amount'],
-                    p['price'],
-                    p['available_date'],
-                    p['stock_quantity'],
-                    p['quantity_all_versions']
+                    change['timestamp'],
+                    change['id_product'],
+                    change['reference'],
+                    change['price'],
+                    change['previous_price'],
+                    change['price_change'],
+                    change['stock_quantity'],
+                    change['previous_stock'],
+                    change['stock_change']
                 ])
 
-            # Write changes section
-            writer.writerow([])
-            writer.writerow(['=== CHANGES FROM PREVIOUS DAY ==='])
-            if changes:
-                writer.writerow([
-                    'timestamp', 'id_product', 'reference',
-                    'price', 'previous_price', 'price_change',
-                    'stock_quantity', 'previous_stock', 'stock_change'
-                ])
-                for change in changes:
-                    writer.writerow([
-                        change['timestamp'],
-                        change['id_product'],
-                        change['reference'],
-                        change['price'],
-                        change['previous_price'],
-                        change['price_change'],
-                        change['stock_quantity'],
-                        change['previous_stock'],
-                        change['stock_change']
-                    ])
-            else:
-                writer.writerow(['No changes detected'])
+        logging.info(f"Appended {len(changes)} changes to {CHANGES_LOG_FILE}")
 
-        logging.info(f"Saved {len(current_products)} products and {len(changes)} changes to {DATA_FILE}")
     except Exception as e:
-        logging.error(f"Error saving data: {e}")
+        logging.error(f"Error saving changes log: {e}")
 
 
-def daily_monitor():
-    """Main monitoring function"""
-    logging.info("Starting daily monitoring...")
+def save_no_changes_log():
+    """Append 'no changes' entry to the changes log"""
+    file_exists = os.path.exists(CHANGES_LOG_FILE)
+
+    try:
+        with open(CHANGES_LOG_FILE, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+
+            # Write separator if file exists
+            if file_exists:
+                writer.writerow([])  # Empty line for separation
+
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            writer.writerow([f'{current_time} - No changes detected'])
+
+        logging.info(f"Recorded 'no changes' entry in {CHANGES_LOG_FILE}")
+
+    except Exception as e:
+        logging.error(f"Error saving no changes log: {e}")
+
+
+def run_monitor():
+    """Daily monitoring function to run at 00:00"""
+    logging.info("Starting daily monitoring cycle...")
 
     session = requests.Session()
 
-    # Get all products using the robust logic from the first code
+    # Get all products
     products = get_all_products(session)
     if not products:
         logging.error("No products found!")
@@ -990,34 +1005,62 @@ def daily_monitor():
 
     logging.info(f"Successfully processed {len(current_products)} products")
 
+    # Save current products to timestamped file
+    save_current_data(current_products)
+
     # Load previous data and compare
     previous_data = load_previous_data()
     changes = compare_products(current_products, previous_data)
 
+    # Save changes to log
     if changes:
         logging.info(f"Detected {len(changes)} changes from previous run")
+        save_changes_log(changes)
     else:
         logging.info("No changes detected from previous run")
+        save_no_changes_log()
 
-    # Save new data
-    save_data(current_products, changes)
+    logging.info("Daily monitoring cycle completed successfully")
 
-    logging.info("Daily monitoring completed successfully")
+
+def calculate_next_run_time():
+    """Calculate next 00:00 run time"""
+    now = datetime.now()
+    # Next midnight (tomorrow 00:00)
+    next_run = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return next_run
+
+
+def wait_until_next_run():
+    """Wait until next scheduled run time"""
+    next_run = calculate_next_run_time()
+    wait_seconds = (next_run - datetime.now()).total_seconds()
+
+    if wait_seconds > 0:
+        logging.info(f"Next run scheduled for: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+        logging.info(f"Waiting {wait_seconds:.0f} seconds until next run...")
+        time.sleep(wait_seconds)
 
 
 def main():
     """Main function"""
     setup_directories()
-    logging.info("Starting product monitor")
+    logging.info("Starting daily product monitor (runs at 00:00 each day)")
 
-    # Run immediately and then daily
-    daily_monitor()
-    schedule.every().day.at("00:00").do(daily_monitor)
+    # Run immediately on startup
+    logging.info("Running initial monitoring cycle...")
+    run_monitor()
 
-    logging.info("Scheduler set up. Running daily at 00:00")
+    # Schedule daily runs at 00:00
+    schedule.every().day.at("00:00").do(run_monitor)
+    logging.info("Daily scheduler set up. Will run every day at 00:00")
+
     while True:
+        # Check for scheduled runs
         schedule.run_pending()
-        time.sleep(3600)  # Check every hour
+
+        # Sleep for 30 seconds and check again
+        time.sleep(30)
 
 
 if __name__ == '__main__':
