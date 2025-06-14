@@ -32,7 +32,7 @@ USER_AGENTS = [
 # Base URL and categories
 BASE_URL = 'https://www.minimx.fr/'
 CATEGORY_URLS = [
-    'https://www.minimx.fr/amortisseurs-dirt-bike/1305-chaussette-d-amortisseur-320mm-monster.html',
+     'https://www.minimx.fr/amortisseurs-dirt-bike/1305-chaussette-d-amortisseur-320mm-monster.html',
     'https://www.minimx.fr/cale-pied-et-bequille/1005-cales-pieds-rouge-cnc-ycf-pour-dirt-bike-pit-bike.html',
     'https://www.minimx.fr/configurateur-de-transmission/894-139004-pack-nervosite-140cc-yx-lifan-chaine-pignon-couronne-dirt-bike.html#/24-pas_de_chaine-420/170-nombre_de_dents_couronne-39_dents/815-nombre_de_dents-14_dents',
     'https://www.minimx.fr/echappement-scalvini/15780-ligne-d-echappement-double-sorties-scalvini-carbon-crf110.html?fast_search=fs',
@@ -644,7 +644,7 @@ def get_product_links(session, category_url):
         url = f"{category_url}?page={page}" if page > 1 else category_url
         try:
             logging.info(f"Fetching page {page} of {category_url}")
-            response = session.get(url, headers=get_headers())
+            response = session.get(url, headers=get_headers(), timeout=30)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -704,6 +704,9 @@ def get_product_links(session, category_url):
         except requests.RequestException as e:
             logging.error(f"Error fetching category page {url}: {e}")
             break
+        except Exception as e:
+            logging.error(f"Unexpected error processing page {page} of {category_url}: {e}")
+            break
 
     if page > max_pages:
         logging.warning(f"Reached maximum page limit ({max_pages}) for {category_url}")
@@ -717,15 +720,19 @@ def get_all_products(session):
     all_products = []
     for category_url in CATEGORY_URLS:
         logging.info(f"Scraping category: {category_url}")
-        products = get_product_links(session, category_url)
-        all_products.extend(products)
-        time.sleep(3)
+        try:
+            products = get_product_links(session, category_url)
+            all_products.extend(products)
+            time.sleep(3)
+        except Exception as e:
+            logging.error(f"Error processing category {category_url}: {e}")
+            continue
 
     # Remove duplicates based on product ID
     seen_ids = set()
     unique_products = []
     for product in all_products:
-        if product['id_product'] not in seen_ids:
+        if product.get('id_product') and product['id_product'] not in seen_ids:
             unique_products.append(product)
             seen_ids.add(product['id_product'])
 
@@ -736,7 +743,7 @@ def get_all_products(session):
 def extract_product_details(session, product):
     """Extract detailed product information from product page."""
     try:
-        response = session.get(product['url'], headers=get_headers())
+        response = session.get(product['url'], headers=get_headers(), timeout=30)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -831,69 +838,152 @@ def extract_product_details(session, product):
     except requests.RequestException as e:
         logging.error(f"Error fetching product details for {product['url']}: {e}")
         return None
+    except Exception as e:
+        logging.error(f"Unexpected error extracting product details for {product['url']}: {e}")
+        return None
+
+
+def validate_product_data(product):
+    """Validate that product data has required fields"""
+    required_fields = ['id_product', 'reference', 'meta_title', 'url', 'category_url',
+                       'price_without_reduction', 'discount_amount', 'price',
+                       'available_date', 'stock_quantity', 'quantity_all_versions']
+
+    for field in required_fields:
+        if field not in product:
+            logging.warning(f"Missing required field '{field}' in product data")
+            return False
+
+    return True
 
 
 def load_previous_data():
-    """Load previous data from the most recent file"""
-    # Find all products files
-    product_files = glob.glob(os.path.join(DATA_DIR, 'products_*.csv'))
+    """Load previous data from the most recent file with error handling"""
+    # Find all CSV files that match our naming pattern
+    pattern = os.path.join(DATA_DIR, '*-*.csv')  # matches YYYY-MM-DD_HH-MM.csv
+    product_files = glob.glob(pattern)
+
+    # Filter out changes_log.csv
+    product_files = [f for f in product_files if not f.endswith('changes_log.csv')]
+
     if not product_files:
+        logging.info("No previous product data files found")
         return None
 
     # Sort files by datetime in filename (newest first)
     product_files.sort(reverse=True)
     latest_file = product_files[0]
 
+    logging.info(f"Loading previous data from: {latest_file}")
+
     try:
         with open(latest_file, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
-            return list(reader)
+            data = []
+            for row_num, row in enumerate(reader, 1):
+                # Validate that required keys exist
+                if 'id_product' not in row:
+                    logging.warning(
+                        f"Row {row_num} in {latest_file} missing 'id_product' key. Available keys: {list(row.keys())}")
+                    continue
+
+                # Ensure all required fields have default values if missing
+                row.setdefault('price', '0')
+                row.setdefault('stock_quantity', '0')
+                row.setdefault('reference', '')
+
+                data.append(row)
+
+            logging.info(f"Successfully loaded {len(data)} products from previous data")
+            return data
+
     except Exception as e:
         logging.error(f"Error loading previous data from {latest_file}: {e}")
         return None
 
 
 def compare_products(current, previous):
-    """Compare current products with previous data"""
+    """Compare current products with previous data with improved error handling"""
     if not previous:
+        logging.info("No previous data available for comparison")
         return []
 
-    prev_dict = {p['id_product']: p for p in previous}
+    # Create a dictionary from previous data with error handling
+    prev_dict = {}
+    for p in previous:
+        if 'id_product' in p and p['id_product']:
+            prev_dict[p['id_product']] = p
+        else:
+            logging.warning(f"Skipping previous product with missing or empty id_product: {p}")
+
     changes = []
 
     for product in current:
-        pid = product['id_product']
-        if pid in prev_dict:
-            prev_product = prev_dict[pid]
+        try:
+            pid = product.get('id_product')
+            if not pid:
+                logging.warning(f"Current product missing id_product: {product}")
+                continue
 
-            current_price = round_float(product['price'])
-            previous_price = round_float(prev_product['price'])
-            price_changed = current_price != previous_price
-            stock_changed = int(product['stock_quantity']) != int(prev_product['stock_quantity'])
+            if pid in prev_dict:
+                prev_product = prev_dict[pid]
 
-            if price_changed or stock_changed:
-                changes.append({
-                    'id_product': pid,
-                    'reference': product['reference'],
-                    'price': current_price,
-                    'previous_price': previous_price,
-                    'stock_quantity': product['stock_quantity'],
-                    'previous_stock': prev_product['stock_quantity'],
-                    'price_change': price_changed,
-                    'stock_change': stock_changed,
-                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                })
+                # Safe price comparison
+                try:
+                    current_price = round_float(product.get('price', 0))
+                    previous_price = round_float(prev_product.get('price', 0))
+                    price_changed = current_price != previous_price
+                except (ValueError, TypeError) as e:
+                    logging.warning(f"Error comparing prices for product {pid}: {e}")
+                    price_changed = False
+                    current_price = 0
+                    previous_price = 0
+
+                # Safe stock comparison
+                try:
+                    current_stock = int(product.get('stock_quantity', 0))
+                    previous_stock = int(prev_product.get('stock_quantity', 0))
+                    stock_changed = current_stock != previous_stock
+                except (ValueError, TypeError) as e:
+                    logging.warning(f"Error comparing stock for product {pid}: {e}")
+                    stock_changed = False
+                    current_stock = 0
+                    previous_stock = 0
+
+                if price_changed or stock_changed:
+                    changes.append({
+                        'id_product': pid,
+                        'reference': product.get('reference', ''),
+                        'price': current_price,
+                        'previous_price': previous_price,
+                        'stock_quantity': current_stock,
+                        'previous_stock': previous_stock,
+                        'price_change': price_changed,
+                        'stock_change': stock_changed,
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    })
+        except Exception as e:
+            logging.error(f"Error comparing product {product.get('id_product', 'unknown')}: {e}")
+            continue
 
     return changes
 
 
 def save_current_data(current_products):
-    """Save current products to timestamped file"""
+    """Save current products to timestamped file with validation"""
     timestamped_file = get_timestamped_filename()
 
     try:
+        # Validate products before saving
+        valid_products = []
+        for product in current_products:
+            if validate_product_data(product):
+                valid_products.append(product)
+            else:
+                logging.warning(f"Skipping invalid product data: {product}")
+
         with open(timestamped_file, 'w', newline='', encoding='utf-8') as f:
-            if current_products:
+            if valid_products:
                 writer = csv.DictWriter(f, fieldnames=[
                     'timestamp', 'id_product', 'reference', 'meta_title', 'url', 'category_url',
                     'price_without_reduction', 'discount_amount', 'price', 'available_date',
@@ -902,15 +992,17 @@ def save_current_data(current_products):
                 writer.writeheader()
 
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                for product in current_products:
+                for product in valid_products:
                     product_data = product.copy()
                     product_data['timestamp'] = timestamp
                     writer.writerow(product_data)
 
-        logging.info(f"Saved {len(current_products)} products to {timestamped_file}")
+        logging.info(f"Saved {len(valid_products)} valid products to {timestamped_file}")
+        return len(valid_products)
 
     except Exception as e:
         logging.error(f"Error saving current data: {e}")
+        return 0
 
 
 def save_changes_log(changes):
@@ -981,46 +1073,79 @@ def save_no_changes_log():
 
 
 def run_monitor():
-    """Daily monitoring function to run at 00:00"""
+    """Daily monitoring function to run at 00:00 with improved error handling"""
     logging.info("Starting daily monitoring cycle...")
 
-    session = requests.Session()
+    try:
+        session = requests.Session()
+        session.timeout = 30  # Set session timeout
 
-    # Get all products
-    products = get_all_products(session)
-    if not products:
-        logging.error("No products found!")
-        return
+        # Get all products
+        products = get_all_products(session)
+        if not products:
+            logging.error("No products found!")
+            return
 
-    logging.info(f"Found {len(products)} unique products to process")
+        logging.info(f"Found {len(products)} unique products to process")
 
-    # Extract details for all products
-    current_products = []
-    for product in products:
-        logging.info(f"Processing product: {product['id_product']}")
-        details = extract_product_details(session, product)
-        if details:
-            current_products.append(details)
-        time.sleep(2)  # Be nice to the server
+        # Extract details for all products
+        current_products = []
+        successful_count = 0
+        failed_count = 0
 
-    logging.info(f"Successfully processed {len(current_products)} products")
+        for i, product in enumerate(products, 1):
+            try:
+                logging.info(f"Processing product {i}/{len(products)}: {product['id_product']}")
+                details = extract_product_details(session, product)
+                if details and validate_product_data(details):
+                    current_products.append(details)
+                    successful_count += 1
+                else:
+                    failed_count += 1
+                    logging.warning(f"Failed to extract valid details for product: {product['id_product']}")
 
-    # Save current products to timestamped file
-    save_current_data(current_products)
+                time.sleep(2)  # Be nice to the server
 
-    # Load previous data and compare
-    previous_data = load_previous_data()
-    changes = compare_products(current_products, previous_data)
+                # Log progress every 100 products
+                if i % 100 == 0:
+                    logging.info(
+                        f"Progress: {i}/{len(products)} products processed ({successful_count} successful, {failed_count} failed)")
 
-    # Save changes to log
-    if changes:
-        logging.info(f"Detected {len(changes)} changes from previous run")
-        save_changes_log(changes)
-    else:
-        logging.info("No changes detected from previous run")
-        save_no_changes_log()
+            except Exception as e:
+                failed_count += 1
+                logging.error(f"Error processing product {product.get('id_product', 'unknown')}: {e}")
+                continue
 
-    logging.info("Daily monitoring cycle completed successfully")
+        logging.info(
+            f"Processing completed: {successful_count} successful, {failed_count} failed out of {len(products)} total")
+
+        if not current_products:
+            logging.error("No valid products were processed!")
+            return
+
+        # Save current products to timestamped file
+        saved_count = save_current_data(current_products)
+        if saved_count == 0:
+            logging.error("Failed to save current data!")
+            return
+
+        # Load previous data and compare
+        previous_data = load_previous_data()
+        changes = compare_products(current_products, previous_data)
+
+        # Save changes to log
+        if changes:
+            logging.info(f"Detected {len(changes)} changes from previous run")
+            save_changes_log(changes)
+        else:
+            logging.info("No changes detected from previous run")
+            save_no_changes_log()
+
+        logging.info("Daily monitoring cycle completed successfully")
+
+    except Exception as e:
+        logging.error(f"Fatal error in monitoring cycle: {e}")
+        raise
 
 
 def calculate_next_run_time():
@@ -1043,31 +1168,682 @@ def wait_until_next_run():
 
 
 def main():
-    """Main function"""
-    setup_directories()
-    logging.info("Starting daily product monitor (runs at 00:00 each day)")
-
-    # Run immediately on startup
-    logging.info("Running initial monitoring cycle...")
-    run_monitor()
-
-    # Schedule daily runs at 00:00
-    schedule.every().day.at("00:00").do(run_monitor)
-    logging.info("Daily scheduler set up. Will run every day at 00:00")
-
-    while True:
-        # Check for scheduled runs
-        schedule.run_pending()
-
-        # Sleep for 30 seconds and check again
-        time.sleep(30)
-
-
-if __name__ == '__main__':
+    """Main function with improved error handling"""
     try:
-        main()
+        setup_directories()
+        logging.info("Starting daily product monitor (runs at 00:00 each day)")
+
+        # Run immediately on startup
+        logging.info("Running initial monitoring cycle...")
+        run_monitor()
+
+        # Schedule daily runs at 00:00
+        schedule.every().day.at("00:00").do(run_monitor)
+        logging.info("Daily scheduler set up. Will run every day at 00:00")
+
+        while True:
+            try:
+                # Check for scheduled runs
+                schedule.run_pending()
+
+                # Sleep for 30 seconds and check again
+                time.sleep(30)
+            except Exception as e:
+                logging.error(f"Error in main loop: {e}")
+                time.sleep(60)  # Wait a bit longer if there's an error
+                continue
+
     except KeyboardInterrupt:
         logging.info("Script stopped by user")
     except Exception as e:
-        logging.error(f"Fatal error: {e}")
+        logging.error(f"Fatal error in main function: {e}")
         raise
+
+
+if __name__ == '__main__':
+    main()import requests
+from bs4 import BeautifulSoup
+import time
+import csv
+from datetime import datetime, timedelta
+import os
+import schedule
+import pandas as pd
+import logging
+import re
+import json
+import random
+import glob
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('stock_monitor.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+
+# User-Agents for rotation
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
+]
+
+# Base URL and categories
+BASE_URL = 'https://www.minimx.fr/'
+CATEGORY_URLS = [
+    'https://www.minimx.fr/fr/575-de-299-a-499',
+    'https://www.minimx.fr/cale-pied-et-bequille/1005-cales-pieds-rouge-cnc-ycf-pour-dirt-bike-pit-bike.html',
+    'https://www.minimx.fr/configurateur-de-transmission/894-139004-pack-nervosite-140cc-yx-lifan-chaine-pignon-couronne-dirt-bike.html#/24-pas_de_chaine-420/170-nombre_de_dents_couronne-39_dents/815-nombre_de_dents-14_dents',
+]
+
+CATEGORY_URLS = list(set(CATEGORY_URLS))
+
+# Directory and output files
+DATA_DIR = 'stock_data'
+CHANGES_LOG_FILE = 'stock_data/changes_log.csv'
+
+
+def round_float(value, decimals=2):
+    """Round float value to specified decimal places"""
+    try:
+        return round(float(value), decimals)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def get_headers():
+    """Generate headers to mimic a browser."""
+    return {
+        'User-Agent': random.choice(USER_AGENTS),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Connection': 'keep-alive',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': 'https://www.minimx.fr/',
+    }
+
+
+def setup_directories():
+    """Create directories for data if they don't exist."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def get_timestamped_filename():
+    """Get filename with timestamp for products data"""
+    now = datetime.now()
+    return f"stock_data/{now.strftime('%Y-%m-%d_%H-%M')}.csv"
+
+
+def get_product_links(session, category_url):
+    """Extract product links from a category page, handling pagination."""
+    product_links = []
+    page = 1
+    max_pages = 20
+    previous_page_products = set()
+
+    while page <= max_pages:
+        url = f"{category_url}?page={page}" if page > 1 else category_url
+        try:
+            logging.info(f"Fetching page {page} of {category_url}")
+            response = session.get(url, headers=get_headers(), timeout=30)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            products_container = soup.select_one('#products')
+            if not products_container:
+                logging.info(f"No products container found on page {page} of {category_url}")
+                break
+
+            products = products_container.select('a.product-thumbnail')
+            if not products:
+                logging.info(f"No more products found on page {page} of {category_url}")
+                break
+
+            pagination = soup.select_one('.pagination')
+            if pagination:
+                next_disabled = pagination.select_one('.next.disabled') or not pagination.select_one('.next')
+                if next_disabled:
+                    logging.info(f"Reached last page ({page}) for {category_url}")
+
+            current_page_products = set()
+            current_page_links = []
+
+            for product in products:
+                href = product.get('href')
+                if href and '/fr/' in href and 'index.php' not in href:
+                    product_id = re.search(r'/(\d+)-', href)
+                    product_id = product_id.group(1) if product_id else None
+                    if product_id:
+                        current_page_products.add(product_id)
+                        current_page_links.append({
+                            'url': href,
+                            'id_product': product_id,
+                            'category_url': category_url
+                        })
+
+            if current_page_products and current_page_products == previous_page_products:
+                logging.warning(
+                    f"Detected duplicate products on page {page} of {category_url}, breaking pagination loop")
+                break
+
+            if page > 1 and len(current_page_products) == len(previous_page_products) and all(
+                    pid in previous_page_products for pid in current_page_products):
+                logging.warning(
+                    f"Page {page} appears to contain the same products as previous page for {category_url}, stopping pagination")
+                break
+
+            if not current_page_links:
+                logging.info(f"No new products found on page {page} of {category_url}")
+                break
+
+            product_links.extend(current_page_links)
+            previous_page_products = current_page_products
+
+            logging.info(f"Found {len(current_page_links)} products on page {page} of {category_url}")
+            page += 1
+            time.sleep(3)
+        except requests.RequestException as e:
+            logging.error(f"Error fetching category page {url}: {e}")
+            break
+        except Exception as e:
+            logging.error(f"Unexpected error processing page {page} of {category_url}: {e}")
+            break
+
+    if page > max_pages:
+        logging.warning(f"Reached maximum page limit ({max_pages}) for {category_url}")
+
+    logging.info(f"Total of {len(product_links)} products found for {category_url}")
+    return product_links
+
+
+def get_all_products(session):
+    """Get all product links by scanning category pages."""
+    all_products = []
+    for category_url in CATEGORY_URLS:
+        logging.info(f"Scraping category: {category_url}")
+        try:
+            products = get_product_links(session, category_url)
+            all_products.extend(products)
+            time.sleep(3)
+        except Exception as e:
+            logging.error(f"Error processing category {category_url}: {e}")
+            continue
+
+    # Remove duplicates based on product ID
+    seen_ids = set()
+    unique_products = []
+    for product in all_products:
+        if product.get('id_product') and product['id_product'] not in seen_ids:
+            unique_products.append(product)
+            seen_ids.add(product['id_product'])
+
+    logging.info(f"Total unique products found: {len(unique_products)}")
+    return unique_products
+
+
+def extract_product_details(session, product):
+    """Extract detailed product information from product page."""
+    try:
+        response = session.get(product['url'], headers=get_headers(), timeout=30)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Initialize default values
+        reference = ""
+        meta_title = ""
+        price_without_reduction = 0
+        discount_amount = 0
+        price = 0
+        available_date = ""
+        stock_quantity = 0
+        quantity_all_versions = 0
+
+        # Extract meta title from page title
+        title_tag = soup.find('title')
+        if title_tag:
+            meta_title = title_tag.get_text(strip=True)
+
+        # Try to extract product details from JSON data
+        product_details_elem = soup.select_one('#product-details')
+        if product_details_elem and 'data-product' in product_details_elem.attrs:
+            try:
+                product_json = json.loads(product_details_elem['data-product'])
+
+                reference = product_json.get('reference', '')
+                stock_quantity = product_json.get('quantity', 0)
+                quantity_all_versions = product_json.get('quantity_all_versions', 0)
+                price = product_json.get('price_amount', 0)
+                price_without_reduction = product_json.get('price_without_reduction', price)
+
+                if price_without_reduction and price:
+                    discount_amount = float(price_without_reduction) - float(price)
+                else:
+                    discount_amount = 0
+
+                available_date = product_json.get('available_date', '')
+
+            except (json.JSONDecodeError, KeyError) as json_err:
+                logging.error(f"Error parsing product JSON for {product['url']}: {json_err}")
+
+        # Alternative extraction methods if JSON parsing fails
+        if not reference:
+            ref_elem = soup.select_one('[data-product-reference]')
+            if ref_elem:
+                reference = ref_elem.get('data-product-reference', '')
+            else:
+                ref_patterns = [
+                    soup.select_one('.product-reference'),
+                    soup.select_one('.reference'),
+                    soup.select_one('[class*="reference"]')
+                ]
+                for elem in ref_patterns:
+                    if elem:
+                        reference = elem.get_text(strip=True).replace('Référence:', '').strip()
+                        break
+
+        if not price:
+            price_elem = soup.select_one('.price, .current-price, [class*="price"]')
+            if price_elem:
+                price_text = price_elem.get_text(strip=True)
+                price_match = re.search(r'[\d,]+\.?\d*', price_text.replace(',', '.'))
+                if price_match:
+                    price = float(price_match.group())
+
+        if not price_without_reduction:
+            original_price_elem = soup.select_one('.regular-price, .old-price, [class*="original"]')
+            if original_price_elem:
+                price_text = original_price_elem.get_text(strip=True)
+                price_match = re.search(r'[\d,]+\.?\d*', price_text.replace(',', '.'))
+                if price_match:
+                    price_without_reduction = float(price_match.group())
+            else:
+                price_without_reduction = price
+
+        if price_without_reduction and price and not discount_amount:
+            discount_amount = float(price_without_reduction) - float(price)
+
+        return {
+            'id_product': product['id_product'],
+            'reference': reference,
+            'meta_title': meta_title,
+            'url': product['url'],
+            'category_url': product['category_url'],
+            'price_without_reduction': round_float(price_without_reduction),
+            'discount_amount': round_float(discount_amount),
+            'price': round_float(price),
+            'available_date': available_date,
+            'stock_quantity': int(stock_quantity),
+            'quantity_all_versions': int(quantity_all_versions)
+        }
+
+    except requests.RequestException as e:
+        logging.error(f"Error fetching product details for {product['url']}: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"Unexpected error extracting product details for {product['url']}: {e}")
+        return None
+
+
+def validate_product_data(product):
+    """Validate that product data has required fields"""
+    required_fields = ['id_product', 'reference', 'meta_title', 'url', 'category_url',
+                       'price_without_reduction', 'discount_amount', 'price',
+                       'available_date', 'stock_quantity', 'quantity_all_versions']
+
+    for field in required_fields:
+        if field not in product:
+            logging.warning(f"Missing required field '{field}' in product data")
+            return False
+
+    return True
+
+
+def load_previous_data():
+    """Load previous data from the most recent file with error handling"""
+    # Find all CSV files that match our naming pattern
+    pattern = os.path.join(DATA_DIR, '*-*.csv')  # matches YYYY-MM-DD_HH-MM.csv
+    product_files = glob.glob(pattern)
+
+    # Filter out changes_log.csv
+    product_files = [f for f in product_files if not f.endswith('changes_log.csv')]
+
+    if not product_files:
+        logging.info("No previous product data files found")
+        return None
+
+    # Sort files by datetime in filename (newest first)
+    product_files.sort(reverse=True)
+    latest_file = product_files[0]
+
+    logging.info(f"Loading previous data from: {latest_file}")
+
+    try:
+        with open(latest_file, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            data = []
+            for row_num, row in enumerate(reader, 1):
+                # Validate that required keys exist
+                if 'id_product' not in row:
+                    logging.warning(
+                        f"Row {row_num} in {latest_file} missing 'id_product' key. Available keys: {list(row.keys())}")
+                    continue
+
+                # Ensure all required fields have default values if missing
+                row.setdefault('price', '0')
+                row.setdefault('stock_quantity', '0')
+                row.setdefault('reference', '')
+
+                data.append(row)
+
+            logging.info(f"Successfully loaded {len(data)} products from previous data")
+            return data
+
+    except Exception as e:
+        logging.error(f"Error loading previous data from {latest_file}: {e}")
+        return None
+
+
+def compare_products(current, previous):
+    """Compare current products with previous data with improved error handling"""
+    if not previous:
+        logging.info("No previous data available for comparison")
+        return []
+
+    # Create a dictionary from previous data with error handling
+    prev_dict = {}
+    for p in previous:
+        if 'id_product' in p and p['id_product']:
+            prev_dict[p['id_product']] = p
+        else:
+            logging.warning(f"Skipping previous product with missing or empty id_product: {p}")
+
+    changes = []
+
+    for product in current:
+        try:
+            pid = product.get('id_product')
+            if not pid:
+                logging.warning(f"Current product missing id_product: {product}")
+                continue
+
+            if pid in prev_dict:
+                prev_product = prev_dict[pid]
+
+                # Safe price comparison
+                try:
+                    current_price = round_float(product.get('price', 0))
+                    previous_price = round_float(prev_product.get('price', 0))
+                    price_changed = current_price != previous_price
+                except (ValueError, TypeError) as e:
+                    logging.warning(f"Error comparing prices for product {pid}: {e}")
+                    price_changed = False
+                    current_price = 0
+                    previous_price = 0
+
+                # Safe stock comparison
+                try:
+                    current_stock = int(product.get('stock_quantity', 0))
+                    previous_stock = int(prev_product.get('stock_quantity', 0))
+                    stock_changed = current_stock != previous_stock
+                except (ValueError, TypeError) as e:
+                    logging.warning(f"Error comparing stock for product {pid}: {e}")
+                    stock_changed = False
+                    current_stock = 0
+                    previous_stock = 0
+
+                if price_changed or stock_changed:
+                    changes.append({
+                        'id_product': pid,
+                        'reference': product.get('reference', ''),
+                        'price': current_price,
+                        'previous_price': previous_price,
+                        'stock_quantity': current_stock,
+                        'previous_stock': previous_stock,
+                        'price_change': price_changed,
+                        'stock_change': stock_changed,
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    })
+        except Exception as e:
+            logging.error(f"Error comparing product {product.get('id_product', 'unknown')}: {e}")
+            continue
+
+    return changes
+
+
+def save_current_data(current_products):
+    """Save current products to timestamped file with validation"""
+    timestamped_file = get_timestamped_filename()
+
+    try:
+        # Validate products before saving
+        valid_products = []
+        for product in current_products:
+            if validate_product_data(product):
+                valid_products.append(product)
+            else:
+                logging.warning(f"Skipping invalid product data: {product}")
+
+        with open(timestamped_file, 'w', newline='', encoding='utf-8') as f:
+            if valid_products:
+                writer = csv.DictWriter(f, fieldnames=[
+                    'timestamp', 'id_product', 'reference', 'meta_title', 'url', 'category_url',
+                    'price_without_reduction', 'discount_amount', 'price', 'available_date',
+                    'stock_quantity', 'quantity_all_versions'
+                ])
+                writer.writeheader()
+
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                for product in valid_products:
+                    product_data = product.copy()
+                    product_data['timestamp'] = timestamp
+                    writer.writerow(product_data)
+
+        logging.info(f"Saved {len(valid_products)} valid products to {timestamped_file}")
+        return len(valid_products)
+
+    except Exception as e:
+        logging.error(f"Error saving current data: {e}")
+        return 0
+
+
+def save_changes_log(changes):
+    """Append changes to the unified changes log file"""
+    if not changes:
+        return
+
+    # Check if file exists to determine if we need to write header
+    file_exists = os.path.exists(CHANGES_LOG_FILE)
+
+    try:
+        with open(CHANGES_LOG_FILE, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+
+            # Write separator and timestamp header
+            if file_exists:
+                writer.writerow([])  # Empty line for separation
+
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            writer.writerow([f'=== CHANGES DETECTED AT {current_time} ==='])
+
+            # Write column headers
+            writer.writerow([
+                'timestamp', 'id_product', 'reference',
+                'price', 'previous_price', 'price_change',
+                'stock_quantity', 'previous_stock', 'stock_change'
+            ])
+
+            # Write changes data
+            for change in changes:
+                writer.writerow([
+                    change['timestamp'],
+                    change['id_product'],
+                    change['reference'],
+                    change['price'],
+                    change['previous_price'],
+                    change['price_change'],
+                    change['stock_quantity'],
+                    change['previous_stock'],
+                    change['stock_change']
+                ])
+
+        logging.info(f"Appended {len(changes)} changes to {CHANGES_LOG_FILE}")
+
+    except Exception as e:
+        logging.error(f"Error saving changes log: {e}")
+
+
+def save_no_changes_log():
+    """Append 'no changes' entry to the changes log"""
+    file_exists = os.path.exists(CHANGES_LOG_FILE)
+
+    try:
+        with open(CHANGES_LOG_FILE, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+
+            # Write separator if file exists
+            if file_exists:
+                writer.writerow([])  # Empty line for separation
+
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            writer.writerow([f'{current_time} - No changes detected'])
+
+        logging.info(f"Recorded 'no changes' entry in {CHANGES_LOG_FILE}")
+
+    except Exception as e:
+        logging.error(f"Error saving no changes log: {e}")
+
+
+def run_monitor():
+    """Daily monitoring function to run at 00:00 with improved error handling"""
+    logging.info("Starting daily monitoring cycle...")
+
+    try:
+        session = requests.Session()
+        session.timeout = 30  # Set session timeout
+
+        # Get all products
+        products = get_all_products(session)
+        if not products:
+            logging.error("No products found!")
+            return
+
+        logging.info(f"Found {len(products)} unique products to process")
+
+        # Extract details for all products
+        current_products = []
+        successful_count = 0
+        failed_count = 0
+
+        for i, product in enumerate(products, 1):
+            try:
+                logging.info(f"Processing product {i}/{len(products)}: {product['id_product']}")
+                details = extract_product_details(session, product)
+                if details and validate_product_data(details):
+                    current_products.append(details)
+                    successful_count += 1
+                else:
+                    failed_count += 1
+                    logging.warning(f"Failed to extract valid details for product: {product['id_product']}")
+
+                time.sleep(2)  # Be nice to the server
+
+                # Log progress every 100 products
+                if i % 100 == 0:
+                    logging.info(
+                        f"Progress: {i}/{len(products)} products processed ({successful_count} successful, {failed_count} failed)")
+
+            except Exception as e:
+                failed_count += 1
+                logging.error(f"Error processing product {product.get('id_product', 'unknown')}: {e}")
+                continue
+
+        logging.info(
+            f"Processing completed: {successful_count} successful, {failed_count} failed out of {len(products)} total")
+
+        if not current_products:
+            logging.error("No valid products were processed!")
+            return
+
+        # Save current products to timestamped file
+        saved_count = save_current_data(current_products)
+        if saved_count == 0:
+            logging.error("Failed to save current data!")
+            return
+
+        # Load previous data and compare
+        previous_data = load_previous_data()
+        changes = compare_products(current_products, previous_data)
+
+        # Save changes to log
+        if changes:
+            logging.info(f"Detected {len(changes)} changes from previous run")
+            save_changes_log(changes)
+        else:
+            logging.info("No changes detected from previous run")
+            save_no_changes_log()
+
+        logging.info("Daily monitoring cycle completed successfully")
+
+    except Exception as e:
+        logging.error(f"Fatal error in monitoring cycle: {e}")
+        raise
+
+
+def calculate_next_run_time():
+    """Calculate next 00:00 run time"""
+    now = datetime.now()
+    # Next midnight (tomorrow 00:00)
+    next_run = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return next_run
+
+
+def wait_until_next_run():
+    """Wait until next scheduled run time"""
+    next_run = calculate_next_run_time()
+    wait_seconds = (next_run - datetime.now()).total_seconds()
+
+    if wait_seconds > 0:
+        logging.info(f"Next run scheduled for: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+        logging.info(f"Waiting {wait_seconds:.0f} seconds until next run...")
+        time.sleep(wait_seconds)
+
+
+def main():
+    """Main function with improved error handling"""
+    try:
+        setup_directories()
+        logging.info("Starting daily product monitor (runs at 00:00 each day)")
+
+        # Run immediately on startup
+        logging.info("Running initial monitoring cycle...")
+        run_monitor()
+
+        # Schedule daily runs at 00:00
+        schedule.every().day.at("00:00").do(run_monitor)
+        logging.info("Daily scheduler set up. Will run every day at 00:00")
+
+        while True:
+            try:
+                # Check for scheduled runs
+                schedule.run_pending()
+
+                # Sleep for 30 seconds and check again
+                time.sleep(30)
+            except Exception as e:
+                logging.error(f"Error in main loop: {e}")
+                time.sleep(60)  # Wait a bit longer if there's an error
+                continue
+
+    except KeyboardInterrupt:
+        logging.info("Script stopped by user")
+    except Exception as e:
+        logging.error(f"Fatal error in main function: {e}")
+        raise
+
+
+if __name__ == '__main__':
+    main()
