@@ -627,10 +627,243 @@ def setup_directories():
     os.makedirs(DATA_DIR, exist_ok=True)
 
 
-def get_timestamped_filename():
+def get_timestamped_filename(date=None):
     """Get filename with timestamp for products data"""
-    now = datetime.now()
-    return f"stock_data/{now.strftime('%Y-%m-%d_%H-%M')}.csv"
+    if date is None:
+        date = datetime.now()
+    return f"stock_data/{date.strftime('%Y-%m-%d_%H-%M')}.csv"
+
+
+def get_daily_filename(date=None):
+    """Get daily filename pattern for finding files by date"""
+    if date is None:
+        date = datetime.now()
+    return f"stock_data/{date.strftime('%Y-%m-%d')}_*.csv"
+
+
+def find_file_by_date(target_date):
+    """Find the most recent file for a specific date"""
+    pattern = get_daily_filename(target_date)
+    files = glob.glob(pattern)
+    if files:
+        # Return the most recent file for that date
+        files.sort(reverse=True)
+        return files[0]
+    return None
+
+
+def load_products_from_csv(filename):
+    """Load products from CSV file with error handling"""
+    if not filename or not os.path.exists(filename):
+        logging.warning(f"File {filename} does not exist")
+        return []
+
+    products = []
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                products.append(row)
+        logging.info(f"Loaded {len(products)} products from {filename}")
+        return products
+    except Exception as e:
+        logging.error(f"Error loading file {filename}: {e}")
+        return []
+
+
+def validate_product_data(product):
+    """Validate product data"""
+    required_fields = ['id_product']
+    return all(field in product and product[field] for field in required_fields)
+
+
+def compare_products(current, previous):
+    """Compare current products with previous data with improved error handling"""
+    if not previous:
+        logging.info("No previous data available for comparison")
+        return []
+
+    # Create a dictionary from previous data with error handling
+    prev_dict = {}
+    for p in previous:
+        if 'id_product' in p and p['id_product']:
+            prev_dict[p['id_product']] = p
+        else:
+            logging.warning(f"Skipping previous product with missing or empty id_product: {p}")
+
+    changes = []
+
+    for product in current:
+        try:
+            pid = product.get('id_product')
+            if not pid:
+                logging.warning(f"Current product missing id_product: {product}")
+                continue
+
+            if pid in prev_dict:
+                prev_product = prev_dict[pid]
+
+                # Safe price comparison
+                try:
+                    current_price = round_float(product.get('price', 0))
+                    previous_price = round_float(prev_product.get('price', 0))
+                    price_changed = current_price != previous_price
+                except (ValueError, TypeError) as e:
+                    logging.warning(f"Error comparing prices for product {pid}: {e}")
+                    price_changed = False
+                    current_price = 0
+                    previous_price = 0
+
+                # Safe stock comparison
+                try:
+                    current_stock = int(product.get('stock_quantity', 0))
+                    previous_stock = int(prev_product.get('stock_quantity', 0))
+                    stock_changed = current_stock != previous_stock
+                except (ValueError, TypeError) as e:
+                    logging.warning(f"Error comparing stock for product {pid}: {e}")
+                    stock_changed = False
+                    current_stock = 0
+                    previous_stock = 0
+
+                if price_changed or stock_changed:
+                    changes.append({
+                        'id_product': pid,
+                        'reference': product.get('reference', ''),
+                        'price': current_price,
+                        'previous_price': previous_price,
+                        'stock_quantity': current_stock,
+                        'previous_stock': previous_stock,
+                        'price_change': price_changed,
+                        'stock_change': previous_stock - current_stock,  # Difference: previous - current
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    })
+        except Exception as e:
+            logging.error(f"Error comparing product {product.get('id_product', 'unknown')}: {e}")
+            continue
+
+    return changes
+
+
+def save_changes_log(changes):
+    """Append changes to the unified changes log file"""
+    if not changes:
+        return
+
+    # Check if file exists to determine if we need to write header
+    file_exists = os.path.exists(CHANGES_LOG_FILE)
+
+    try:
+        with open(CHANGES_LOG_FILE, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+
+            # Write separator and timestamp header
+            if file_exists:
+                writer.writerow([])  # Empty line for separation
+
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            writer.writerow([f'=== CHANGES DETECTED AT {current_time} ==='])
+
+            # Write column headers
+            writer.writerow([
+                'timestamp', 'id_product', 'reference',
+                'price', 'previous_price', 'price_change',
+                'stock_quantity', 'previous_stock', 'stock_change'
+            ])
+
+            # Write changes data
+            for change in changes:
+                writer.writerow([
+                    change['timestamp'],
+                    change['id_product'],
+                    change['reference'],
+                    change['price'],
+                    change['previous_price'],
+                    change['price_change'],
+                    change['stock_quantity'],
+                    change['previous_stock'],
+                    change['stock_change']
+                ])
+
+        logging.info(f"Appended {len(changes)} changes to {CHANGES_LOG_FILE}")
+
+    except Exception as e:
+        logging.error(f"Error saving changes log: {e}")
+
+
+def save_no_changes_log():
+    """Append 'no changes' entry to the changes log"""
+    file_exists = os.path.exists(CHANGES_LOG_FILE)
+
+    try:
+        with open(CHANGES_LOG_FILE, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+
+            # Write separator if file exists
+            if file_exists:
+                writer.writerow([])  # Empty line for separation
+
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            writer.writerow([f'{current_time} - No changes detected'])
+
+        logging.info(f"Recorded 'no changes' entry in {CHANGES_LOG_FILE}")
+
+    except Exception as e:
+        logging.error(f"Error saving no changes log: {e}")
+
+
+def analyze_changes_after_save(current_file_path):
+    """Analyze changes by comparing current file with previous day's file"""
+    try:
+        # Get current date from the filename or use today
+        current_date = datetime.now().date()
+        previous_date = current_date - timedelta(days=1)
+
+        logging.info(f"Looking for comparison files - Current: {current_date}, Previous: {previous_date}")
+
+        # Find previous day's file
+        previous_file = find_file_by_date(previous_date)
+
+        if not previous_file:
+            logging.info(f"No file found for previous date {previous_date}. Skipping comparison.")
+            save_no_changes_log()
+            return
+
+        logging.info(f"Comparing files: {current_file_path} vs {previous_file}")
+
+        # Load data from both files
+        current_products = load_products_from_csv(current_file_path)
+        previous_products = load_products_from_csv(previous_file)
+
+        if not current_products:
+            logging.error("Failed to load current products data")
+            return
+
+        if not previous_products:
+            logging.warning("No previous products data available for comparison")
+            save_no_changes_log()
+            return
+
+        # Compare products and find changes
+        changes = compare_products(current_products, previous_products)
+
+        # Log the results
+        if changes:
+            logging.info(f"Detected {len(changes)} changes from previous day:")
+            for change in changes:
+                logging.info(f"  ID: {change['id_product']}, Ref: {change['reference']}")
+                if change['price_change']:
+                    logging.info(f"    Price: {change['previous_price']} -> {change['price']}")
+                if change['stock_change'] != 0:
+                    logging.info(
+                        f"    Stock change: {change['stock_change']} (was: {change['previous_stock']}, now: {change['stock_quantity']})")
+
+            save_changes_log(changes)
+        else:
+            logging.info("No changes detected from previous day")
+            save_no_changes_log()
+
+    except Exception as e:
+        logging.error(f"Error during change analysis: {e}")
 
 
 def get_product_links(session, category_url):
@@ -644,7 +877,7 @@ def get_product_links(session, category_url):
         url = f"{category_url}?page={page}" if page > 1 else category_url
         try:
             logging.info(f"Fetching page {page} of {category_url}")
-            response = session.get(url, headers=get_headers(), timeout=30)
+            response = session.get(url, headers=get_headers())
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -704,9 +937,6 @@ def get_product_links(session, category_url):
         except requests.RequestException as e:
             logging.error(f"Error fetching category page {url}: {e}")
             break
-        except Exception as e:
-            logging.error(f"Unexpected error processing page {page} of {category_url}: {e}")
-            break
 
     if page > max_pages:
         logging.warning(f"Reached maximum page limit ({max_pages}) for {category_url}")
@@ -720,19 +950,15 @@ def get_all_products(session):
     all_products = []
     for category_url in CATEGORY_URLS:
         logging.info(f"Scraping category: {category_url}")
-        try:
-            products = get_product_links(session, category_url)
-            all_products.extend(products)
-            time.sleep(3)
-        except Exception as e:
-            logging.error(f"Error processing category {category_url}: {e}")
-            continue
+        products = get_product_links(session, category_url)
+        all_products.extend(products)
+        time.sleep(3)
 
     # Remove duplicates based on product ID
     seen_ids = set()
     unique_products = []
     for product in all_products:
-        if product.get('id_product') and product['id_product'] not in seen_ids:
+        if product['id_product'] not in seen_ids:
             unique_products.append(product)
             seen_ids.add(product['id_product'])
 
@@ -743,7 +969,7 @@ def get_all_products(session):
 def extract_product_details(session, product):
     """Extract detailed product information from product page."""
     try:
-        response = session.get(product['url'], headers=get_headers(), timeout=30)
+        response = session.get(product['url'], headers=get_headers())
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -838,134 +1064,6 @@ def extract_product_details(session, product):
     except requests.RequestException as e:
         logging.error(f"Error fetching product details for {product['url']}: {e}")
         return None
-    except Exception as e:
-        logging.error(f"Unexpected error extracting product details for {product['url']}: {e}")
-        return None
-
-
-def validate_product_data(product):
-    """Validate that product data has required fields"""
-    required_fields = ['id_product', 'reference', 'meta_title', 'url', 'category_url', 
-                      'price_without_reduction', 'discount_amount', 'price', 
-                      'available_date', 'stock_quantity', 'quantity_all_versions']
-    
-    for field in required_fields:
-        if field not in product:
-            logging.warning(f"Missing required field '{field}' in product data")
-            return False
-    
-    return True
-
-
-def load_previous_data():
-    """Load previous data from the most recent file with error handling"""
-    # Find all CSV files that match our naming pattern
-    pattern = os.path.join(DATA_DIR, '*-*.csv')  # matches YYYY-MM-DD_HH-MM.csv
-    product_files = glob.glob(pattern)
-    
-    # Filter out changes_log.csv
-    product_files = [f for f in product_files if not f.endswith('changes_log.csv')]
-    
-    if not product_files:
-        logging.info("No previous product data files found")
-        return None
-
-    # Sort files by datetime in filename (newest first)
-    product_files.sort(reverse=True)
-    latest_file = product_files[0]
-    
-    logging.info(f"Loading previous data from: {latest_file}")
-
-    try:
-        with open(latest_file, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            data = []
-            for row_num, row in enumerate(reader, 1):
-                # Validate that required keys exist
-                if 'id_product' not in row:
-                    logging.warning(f"Row {row_num} in {latest_file} missing 'id_product' key. Available keys: {list(row.keys())}")
-                    continue
-                
-                # Ensure all required fields have default values if missing
-                row.setdefault('price', '0')
-                row.setdefault('stock_quantity', '0')
-                row.setdefault('reference', '')
-                
-                data.append(row)
-            
-            logging.info(f"Successfully loaded {len(data)} products from previous data")
-            return data
-            
-    except Exception as e:
-        logging.error(f"Error loading previous data from {latest_file}: {e}")
-        return None
-
-
-def compare_products(current, previous):
-    """Compare current products with previous data with improved error handling"""
-    if not previous:
-        logging.info("No previous data available for comparison")
-        return []
-
-    # Create a dictionary from previous data with error handling
-    prev_dict = {}
-    for p in previous:
-        if 'id_product' in p and p['id_product']:
-            prev_dict[p['id_product']] = p
-        else:
-            logging.warning(f"Skipping previous product with missing or empty id_product: {p}")
-
-    changes = []
-
-    for product in current:
-        try:
-            pid = product.get('id_product')
-            if not pid:
-                logging.warning(f"Current product missing id_product: {product}")
-                continue
-                
-            if pid in prev_dict:
-                prev_product = prev_dict[pid]
-
-                # Safe price comparison
-                try:
-                    current_price = round_float(product.get('price', 0))
-                    previous_price = round_float(prev_product.get('price', 0))
-                    price_changed = current_price != previous_price
-                except (ValueError, TypeError) as e:
-                    logging.warning(f"Error comparing prices for product {pid}: {e}")
-                    price_changed = False
-                    current_price = 0
-                    previous_price = 0
-
-                # Safe stock comparison
-                try:
-                    current_stock = int(product.get('stock_quantity', 0))
-                    previous_stock = int(prev_product.get('stock_quantity', 0))
-                    stock_changed = current_stock != previous_stock
-                except (ValueError, TypeError) as e:
-                    logging.warning(f"Error comparing stock for product {pid}: {e}")
-                    stock_changed = False
-                    current_stock = 0
-                    previous_stock = 0
-
-                if price_changed or stock_changed:
-                    changes.append({
-                        'id_product': pid,
-                        'reference': product.get('reference', ''),
-                        'price': current_price,
-                        'previous_price': previous_price,
-                        'stock_quantity': current_stock,
-                        'previous_stock': previous_stock,
-                        'price_change': price_changed,
-                        'stock_change': stock_changed,
-                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    })
-        except Exception as e:
-            logging.error(f"Error comparing product {product.get('id_product', 'unknown')}: {e}")
-            continue
-
-    return changes
 
 
 def save_current_data(current_products):
@@ -997,152 +1095,51 @@ def save_current_data(current_products):
                     writer.writerow(product_data)
 
         logging.info(f"Saved {len(valid_products)} valid products to {timestamped_file}")
-        return len(valid_products)
+        return timestamped_file  # Return the filename for further processing
 
     except Exception as e:
         logging.error(f"Error saving current data: {e}")
-        return 0
-
-
-def save_changes_log(changes):
-    """Append changes to the unified changes log file"""
-    if not changes:
-        return
-
-    # Check if file exists to determine if we need to write header
-    file_exists = os.path.exists(CHANGES_LOG_FILE)
-
-    try:
-        with open(CHANGES_LOG_FILE, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-
-            # Write separator and timestamp header
-            if file_exists:
-                writer.writerow([])  # Empty line for separation
-
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            writer.writerow([f'=== CHANGES DETECTED AT {current_time} ==='])
-
-            # Write column headers
-            writer.writerow([
-                'timestamp', 'id_product', 'reference',
-                'price', 'previous_price', 'price_change',
-                'stock_quantity', 'previous_stock', 'stock_change'
-            ])
-
-            # Write changes data
-            for change in changes:
-                writer.writerow([
-                    change['timestamp'],
-                    change['id_product'],
-                    change['reference'],
-                    change['price'],
-                    change['previous_price'],
-                    change['price_change'],
-                    change['stock_quantity'],
-                    change['previous_stock'],
-                    change['stock_change']
-                ])
-
-        logging.info(f"Appended {len(changes)} changes to {CHANGES_LOG_FILE}")
-
-    except Exception as e:
-        logging.error(f"Error saving changes log: {e}")
-
-
-def save_no_changes_log():
-    """Append 'no changes' entry to the changes log"""
-    file_exists = os.path.exists(CHANGES_LOG_FILE)
-
-    try:
-        with open(CHANGES_LOG_FILE, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-
-            # Write separator if file exists
-            if file_exists:
-                writer.writerow([])  # Empty line for separation
-
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            writer.writerow([f'{current_time} - No changes detected'])
-
-        logging.info(f"Recorded 'no changes' entry in {CHANGES_LOG_FILE}")
-
-    except Exception as e:
-        logging.error(f"Error saving no changes log: {e}")
+        return None
 
 
 def run_monitor():
-    """Daily monitoring function to run at 00:00 with improved error handling"""
+    """Daily monitoring function to run at 00:00"""
     logging.info("Starting daily monitoring cycle...")
 
-    try:
-        session = requests.Session()
-        session.timeout = 30  # Set session timeout
+    session = requests.Session()
 
-        # Get all products
-        products = get_all_products(session)
-        if not products:
-            logging.error("No products found!")
-            return
+    # Get all products
+    products = get_all_products(session)
+    if not products:
+        logging.error("No products found!")
+        return
 
-        logging.info(f"Found {len(products)} unique products to process")
+    logging.info(f"Found {len(products)} unique products to process")
 
-        # Extract details for all products
-        current_products = []
-        successful_count = 0
-        failed_count = 0
-        
-        for i, product in enumerate(products, 1):
-            try:
-                logging.info(f"Processing product {i}/{len(products)}: {product['id_product']}")
-                details = extract_product_details(session, product)
-                if details and validate_product_data(details):
-                    current_products.append(details)
-                    successful_count += 1
-                else:
-                    failed_count += 1
-                    logging.warning(f"Failed to extract valid details for product: {product['id_product']}")
-                
-                time.sleep(2)  # Be nice to the server
-                
-                # Log progress every 100 products
-                if i % 100 == 0:
-                    logging.info(f"Progress: {i}/{len(products)} products processed ({successful_count} successful, {failed_count} failed)")
-                    
-            except Exception as e:
-                failed_count += 1
-                logging.error(f"Error processing product {product.get('id_product', 'unknown')}: {e}")
-                continue
+    # Extract details for all products
+    current_products = []
+    for product in products:
+        logging.info(f"Processing product: {product['id_product']}")
+        details = extract_product_details(session, product)
+        if details:
+            current_products.append(details)
+        time.sleep(2)  # Be nice to the server
 
-        logging.info(f"Processing completed: {successful_count} successful, {failed_count} failed out of {len(products)} total")
+    logging.info(f"Successfully processed {len(current_products)} products")
 
-        if not current_products:
-            logging.error("No valid products were processed!")
-            return
+    # Save current products to timestamped file
+    current_file_path = save_current_data(current_products)
 
-        # Save current products to timestamped file
-        saved_count = save_current_data(current_products)
-        if saved_count == 0:
-            logging.error("Failed to save current data!")
-            return
+    if current_file_path:
+        logging.info(f"Products saved to: {current_file_path}")
 
-        # Load previous data and compare
-        previous_data = load_previous_data()
-        changes = compare_products(current_products, previous_data)
+        # NEW: Analyze changes after saving the current data
+        logging.info("Starting change analysis...")
+        analyze_changes_after_save(current_file_path)
+    else:
+        logging.error("Failed to save current products data")
 
-        # Save changes to log
-        if changes:
-            logging.info(f"Detected {len(changes)} changes from previous run")
-            save_changes_log(changes)
-        else:
-            logging.info("No changes detected from previous run")
-            save_no_changes_log()
-
-        logging.info("Daily monitoring cycle completed successfully")
-
-    except Exception as e:
-        logging.error(f"Fatal error in monitoring cycle: {e}")
-        raise
+    logging.info("Daily monitoring cycle completed successfully")
 
 
 def calculate_next_run_time():
@@ -1165,37 +1162,31 @@ def wait_until_next_run():
 
 
 def main():
-    """Main function with improved error handling"""
-    try:
-        setup_directories()
-        logging.info("Starting daily product monitor (runs at 00:00 each day)")
+    """Main function"""
+    setup_directories()
+    logging.info("Starting daily product monitor (runs at 00:00 each day)")
 
-        # Run immediately on startup
-        logging.info("Running initial monitoring cycle...")
-        run_monitor()
+    # Run immediately on startup
+    logging.info("Running initial monitoring cycle...")
+    run_monitor()
 
-        # Schedule daily runs at 00:00
-        schedule.every().day.at("00:00").do(run_monitor)
-        logging.info("Daily scheduler set up. Will run every day at 00:00")
+    # Schedule daily runs at 00:00
+    schedule.every().day.at("00:00").do(run_monitor)
+    logging.info("Daily scheduler set up. Will run every day at 00:00")
 
-        while True:
-            try:
-                # Check for scheduled runs
-                schedule.run_pending()
+    while True:
+        # Check for scheduled runs
+        schedule.run_pending()
 
-                # Sleep for 30 seconds and check again
-                time.sleep(30)
-            except Exception as e:
-                logging.error(f"Error in main loop: {e}")
-                time.sleep(60)  # Wait a bit longer if there's an error
-                continue
-
-    except KeyboardInterrupt:
-        logging.info("Script stopped by user")
-    except Exception as e:
-        logging.error(f"Fatal error in main function: {e}")
-        raise
+        # Sleep for 30 seconds and check again
+        time.sleep(30)
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logging.info("Script stopped by user")
+    except Exception as e:
+        logging.error(f"Fatal error: {e}")
+        raise
