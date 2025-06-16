@@ -593,7 +593,7 @@ CATEGORY_URLS = [
     'https://www.minimx.fr/pack-pieces-moteur/3843-pack-piston-segment-pochette-140yx.html',
     'https://www.minimx.fr/pack-pieces-moteur/818-pack-piston-segment-pochette-140cc-yx-dirt-bike.html',
     'https://www.minimx.fr/plateau-d-allumage-dirt-bike/290-allumage-rotor-interne-dirt-bike-3700944410435.html',
-]
+    ]
 
 CATEGORY_URLS = list(set(CATEGORY_URLS))
 
@@ -729,6 +729,7 @@ def compare_products(current, previous):
                     changes.append({
                         'id_product': pid,
                         'reference': product.get('reference', ''),
+                        'category_url': product.get('category_url', ''),  # Added category_url
                         'price': current_price,
                         'previous_price': previous_price,
                         'stock_quantity': current_stock,
@@ -763,9 +764,9 @@ def save_changes_log(changes):
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             writer.writerow([f'=== CHANGES DETECTED AT {current_time} ==='])
 
-            # Write column headers
+            # Write column headers - added category_url after reference
             writer.writerow([
-                'timestamp', 'id_product', 'reference',
+                'timestamp', 'id_product', 'reference', 'category_url',
                 'price', 'previous_price', 'price_change',
                 'stock_quantity', 'previous_stock', 'stock_change'
             ])
@@ -776,6 +777,7 @@ def save_changes_log(changes):
                     change['timestamp'],
                     change['id_product'],
                     change['reference'],
+                    change['category_url'],  # Added category_url column
                     change['price'],
                     change['previous_price'],
                     change['price_change'],
@@ -850,7 +852,7 @@ def analyze_changes_after_save(current_file_path):
         if changes:
             logging.info(f"Detected {len(changes)} changes from previous day:")
             for change in changes:
-                logging.info(f"  ID: {change['id_product']}, Ref: {change['reference']}")
+                logging.info(f"  ID: {change['id_product']}, Ref: {change['reference']}, Category: {change['category_url']}")
                 if change['price_change']:
                     logging.info(f"    Price: {change['previous_price']} -> {change['price']}")
                 if change['stock_change'] != 0:
