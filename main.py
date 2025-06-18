@@ -641,6 +641,23 @@ def get_daily_filename(date=None):
     return f"stock_data/{date.strftime('%Y-%m-%d')}_*.csv"
 
 
+def check_if_today_file_exists():
+    """Check if a file for today already exists"""
+    today = datetime.now().date()
+    pattern = get_daily_filename(today)
+    files = glob.glob(pattern)
+
+    if files:
+        # Sort files to get the most recent one
+        files.sort(reverse=True)
+        latest_file = files[0]
+        logging.info(f"Found existing file for today: {latest_file}")
+        return True, latest_file
+    else:
+        logging.info(f"No file found for today ({today})")
+        return False, None
+
+
 def find_file_by_date(target_date):
     """Find the most recent file for a specific date"""
     pattern = get_daily_filename(target_date)
@@ -852,7 +869,8 @@ def analyze_changes_after_save(current_file_path):
         if changes:
             logging.info(f"Detected {len(changes)} changes from previous day:")
             for change in changes:
-                logging.info(f"  ID: {change['id_product']}, Ref: {change['reference']}, Category: {change['category_url']}")
+                logging.info(
+                    f"  ID: {change['id_product']}, Ref: {change['reference']}, Category: {change['category_url']}")
                 if change['price_change']:
                     logging.info(f"    Price: {change['previous_price']} -> {change['price']}")
                 if change['stock_change'] != 0:
@@ -1105,8 +1123,18 @@ def save_current_data(current_products):
 
 
 def run_monitor():
-    """Daily monitoring function to run at 00:00"""
+    """Daily monitoring function with file existence check"""
     logging.info("Starting daily monitoring cycle...")
+
+    # НОВАЯ ЛОГИКА: Проверяем, существует ли файл за сегодня
+    file_exists, existing_file = check_if_today_file_exists()
+
+    if file_exists:
+        logging.info(f"File for today already exists: {existing_file}")
+        logging.info("Skipping scraping for today - file already created")
+        return
+
+    logging.info("No file found for today - proceeding with scraping...")
 
     session = requests.Session()
 
@@ -1135,7 +1163,7 @@ def run_monitor():
     if current_file_path:
         logging.info(f"Products saved to: {current_file_path}")
 
-        # NEW: Analyze changes after saving the current data
+        # Analyze changes after saving the current data
         logging.info("Starting change analysis...")
         analyze_changes_after_save(current_file_path)
     else:
