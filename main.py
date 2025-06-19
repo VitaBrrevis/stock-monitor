@@ -746,7 +746,8 @@ def compare_products(current, previous):
                     changes.append({
                         'id_product': pid,
                         'reference': product.get('reference', ''),
-                        'category_url': product.get('category_url', ''),  # Added category_url
+                        'meta_title': product.get('meta_title', ''),  # Added meta_title
+                        'category_url': product.get('category_url', ''),
                         'price': current_price,
                         'previous_price': previous_price,
                         'stock_quantity': current_stock,
@@ -781,9 +782,9 @@ def save_changes_log(changes):
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             writer.writerow([f'=== CHANGES DETECTED AT {current_time} ==='])
 
-            # Write column headers - added category_url after reference
+            # Write column headers - added meta_title after reference
             writer.writerow([
-                'timestamp', 'id_product', 'reference', 'category_url',
+                'timestamp', 'id_product', 'reference', 'meta_title', 'category_url',
                 'price', 'previous_price', 'price_change',
                 'stock_quantity', 'previous_stock', 'stock_change'
             ])
@@ -794,7 +795,8 @@ def save_changes_log(changes):
                     change['timestamp'],
                     change['id_product'],
                     change['reference'],
-                    change['category_url'],  # Added category_url column
+                    change['meta_title'],  # Added meta_title column
+                    change['category_url'],
                     change['price'],
                     change['previous_price'],
                     change['price_change'],
@@ -870,7 +872,7 @@ def analyze_changes_after_save(current_file_path):
             logging.info(f"Detected {len(changes)} changes from previous day:")
             for change in changes:
                 logging.info(
-                    f"  ID: {change['id_product']}, Ref: {change['reference']}, Category: {change['category_url']}")
+                    f"  ID: {change['id_product']}, Ref: {change['reference']}, Title: {change['meta_title']}, Category: {change['category_url']}")
                 if change['price_change']:
                     logging.info(f"    Price: {change['previous_price']} -> {change['price']}")
                 if change['stock_change'] != 0:
@@ -1126,7 +1128,6 @@ def run_monitor():
     """Daily monitoring function with file existence check"""
     logging.info("Starting daily monitoring cycle...")
 
-    # НОВАЯ ЛОГИКА: Проверяем, существует ли файл за сегодня
     file_exists, existing_file = check_if_today_file_exists()
 
     if file_exists:
