@@ -1183,7 +1183,7 @@ def compare_products(current, previous):
                         'id_product': pid,
                         'reference': product.get('reference', ''),
                         'meta_title': product.get('meta_title', ''),
-                        'brand': product.get('brand', ''),
+                        'id_manufacturer': product.get('id_manufacturer', ''),
                         'is_pack': product.get('is_pack', 'No'),
                         'category_url': product.get('category_url', ''),
                         'price': current_price,
@@ -1224,7 +1224,7 @@ def save_changes_log(changes, grouped=False):
 
             # Write column headers
             writer.writerow([
-                'timestamp', 'id_product', 'reference', 'meta_title', 'brand', 'is_pack', 'category_url',
+                'timestamp', 'id_product', 'reference', 'meta_title', 'id_manufacturer', 'is_pack', 'category_url',
                 'price', 'previous_price', 'price_change',
                 'stock_quantity', 'previous_stock', 'stock_change'
             ])
@@ -1236,7 +1236,7 @@ def save_changes_log(changes, grouped=False):
                     change['id_product'],
                     change['reference'],
                     change['meta_title'],
-                    change['brand'],
+                    change['id_manufacturer'],
                     change['is_pack'],
                     change['category_url'],
                     change['price'],
@@ -1318,7 +1318,7 @@ def analyze_changes_after_save(current_file_path, grouped=False):
             logging.info(f"Detected {len(changes)} {group_type} changes from previous day:")
             for change in changes:
                 logging.info(
-                    f"  ID: {change['id_product']}, Ref: {change['reference']}, Title: {change['meta_title']}, Brand: {change['brand']}, Pack: {change['is_pack']}, Category: {change['category_url']}")
+                    f"  ID: {change['id_product']}, Ref: {change['reference']}, Title: {change['meta_title']}, ID Manufacturer: {change['id_manufacturer']}, Pack: {change['is_pack']}, Category: {change['category_url']}")
                 if change['price_change']:
                     logging.info(f"    Price: {change['previous_price']} -> {change['price']}")
                 if change['stock_change'] != 0:
@@ -1451,18 +1451,6 @@ def get_all_products(session, grouped=False):
     return unique_products
 
 
-def extract_brand_from_features(features):
-    """Extract brand name from features array"""
-    if not features or not isinstance(features, list):
-        return ""
-
-    for feature in features:
-        if isinstance(feature, dict) and feature.get('name') == 'Marque':
-            return feature.get('value', '')
-
-    return ""
-
-
 def extract_product_details_grouped(session, product):
     """Extract detailed product information for grouped categories (lebonquad.com structure)"""
     try:
@@ -1479,7 +1467,7 @@ def extract_product_details_grouped(session, product):
         available_date = ""
         stock_quantity = 0
         quantity_all_versions = 0
-        brand = ""
+        id_manufacturer = ""
         is_pack = "No"
 
         # Extract meta title from page title
@@ -1533,19 +1521,13 @@ def extract_product_details_grouped(session, product):
                                 if reduction_price > 0:
                                     discount_amount = reduction_price
 
+                            # Extract id_manufacturer
+                            manufacturer_match = re.search(r"var id_manufacturer = '?(\d+)'?;", script_content)
+                            if manufacturer_match:
+                                id_manufacturer = manufacturer_match.group(1)
+
                             # Extract available date (if needed in the future)
                             # For now, we'll leave it empty as it's not clearly defined in the script
-
-                            # Extract brand (try to find in page content)
-                            # Look for brand information in product features or description
-                            brand_elements = soup.select('.attribute_label, .product-features li')
-                            for elem in brand_elements:
-                                text = elem.get_text(strip=True)
-                                if 'Marque' in text or 'Brand' in text:
-                                    brand_match = re.search(r'(?:Marque|Brand)[:\s]+(.+)', text)
-                                    if brand_match:
-                                        brand = brand_match.group(1).strip()
-                                        break
 
                             # Check if it's a pack (based on available information)
                             # For now, we'll check if there's any pack-related information
@@ -1559,7 +1541,7 @@ def extract_product_details_grouped(session, product):
             'id_product': product['id_product'],
             'reference': reference,
             'meta_title': meta_title,
-            'brand': brand,
+            'id_manufacturer': id_manufacturer,
             'is_pack': is_pack,
             'url': product['url'],
             'category_url': product['category_url'],
@@ -1595,7 +1577,7 @@ def extract_product_details(session, product, grouped=False):
         available_date = ""
         stock_quantity = 0
         quantity_all_versions = 0
-        brand = ""
+        id_manufacturer = ""
         is_pack = "No"
 
         # Extract meta title from page title
@@ -1614,6 +1596,7 @@ def extract_product_details(session, product, grouped=False):
                 quantity_all_versions = product_json.get('quantity_all_versions', 0)
                 price = product_json.get('price_amount', 0)
                 price_without_reduction = product_json.get('price_without_reduction', price)
+                id_manufacturer = product_json.get('id_manufacturer', '')
 
                 if price_without_reduction and price:
                     discount_amount = float(price_without_reduction) - float(price)
@@ -1621,10 +1604,6 @@ def extract_product_details(session, product, grouped=False):
                     discount_amount = 0
 
                 available_date = product_json.get('available_date', '')
-
-                # Extract brand from features
-                features = product_json.get('features', [])
-                brand = extract_brand_from_features(features)
 
                 # Extract pack status
                 pack_status = product_json.get('pack', 0)
@@ -1670,24 +1649,11 @@ def extract_product_details(session, product, grouped=False):
         if price_without_reduction and price and not discount_amount:
             discount_amount = float(price_without_reduction) - float(price)
 
-        # If brand is still empty, try to extract from HTML
-        if not brand:
-            # Look for brand in product features section
-            features_section = soup.select('.product-features li, .product-detail-features li')
-            for feature in features_section:
-                text = feature.get_text(strip=True)
-                if 'Marque' in text or 'Brand' in text:
-                    # Extract brand value
-                    brand_match = re.search(r'(?:Marque|Brand)[:\s]+(.+)', text)
-                    if brand_match:
-                        brand = brand_match.group(1).strip()
-                        break
-
         return {
             'id_product': product['id_product'],
             'reference': reference,
             'meta_title': meta_title,
-            'brand': brand,
+            'id_manufacturer': id_manufacturer,
             'is_pack': is_pack,
             'url': product['url'],
             'category_url': product['category_url'],
@@ -1720,7 +1686,7 @@ def save_current_data(current_products, grouped=False):
         with open(timestamped_file, 'w', newline='', encoding='utf-8') as f:
             if valid_products:
                 writer = csv.DictWriter(f, fieldnames=[
-                    'timestamp', 'id_product', 'reference', 'meta_title', 'brand', 'is_pack', 'url', 'category_url',
+                    'timestamp', 'id_product', 'reference', 'meta_title', 'id_manufacturer', 'is_pack', 'url', 'category_url',
                     'price_without_reduction', 'discount_amount', 'price', 'available_date',
                     'stock_quantity', 'quantity_all_versions'
                 ])
