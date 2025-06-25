@@ -1026,6 +1026,7 @@ CATEGORY_URLS_GROUPED = [
     'https://www.wkx-racing.com/530-lunettes-cross'
 ]
 
+
 CATEGORY_URLS = list(set(CATEGORY_URLS))
 
 # Directory and output file
@@ -1179,7 +1180,7 @@ def compare_products(current, previous):
                     previous_stock = 0
 
                 if price_changed or stock_changed:
-                    changes.append({
+                    change_data = {
                         'id_product': pid,
                         'reference': product.get('reference', ''),
                         'meta_title': product.get('meta_title', ''),
@@ -1193,7 +1194,13 @@ def compare_products(current, previous):
                         'price_change': price_changed,
                         'stock_change': previous_stock - current_stock,
                         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    })
+                    }
+
+                    # Add id_category_default only for non-grouped products
+                    if 'id_category_default' in product:
+                        change_data['id_category_default'] = product.get('id_category_default', '')
+
+                    changes.append(change_data)
         except Exception as e:
             logging.error(f"Error comparing product {product.get('id_product', 'unknown')}: {e}")
             continue
@@ -1222,30 +1229,59 @@ def save_changes_log(changes, grouped=False):
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             writer.writerow([f'=== CHANGES DETECTED AT {current_time} ==='])
 
-            # Write column headers
-            writer.writerow([
-                'timestamp', 'id_product', 'reference', 'meta_title', 'id_manufacturer', 'is_pack', 'category_url',
-                'price', 'previous_price', 'price_change',
-                'stock_quantity', 'previous_stock', 'stock_change'
-            ])
+            # Write column headers - different for grouped vs regular
+            if grouped:
+                headers = [
+                    'timestamp', 'id_product', 'reference', 'meta_title', 'id_manufacturer', 'is_pack', 'category_url',
+                    'price', 'previous_price', 'price_change',
+                    'stock_quantity', 'previous_stock', 'stock_change'
+                ]
+            else:
+                headers = [
+                    'timestamp', 'id_product', 'reference', 'meta_title', 'id_manufacturer', 'is_pack', 'category_url',
+                    'id_category_default', 'price', 'previous_price', 'price_change',
+                    'stock_quantity', 'previous_stock', 'stock_change'
+                ]
+
+            writer.writerow(headers)
 
             # Write changes data
             for change in changes:
-                writer.writerow([
-                    change['timestamp'],
-                    change['id_product'],
-                    change['reference'],
-                    change['meta_title'],
-                    change['id_manufacturer'],
-                    change['is_pack'],
-                    change['category_url'],
-                    change['price'],
-                    change['previous_price'],
-                    change['price_change'],
-                    change['stock_quantity'],
-                    change['previous_stock'],
-                    change['stock_change']
-                ])
+                if grouped:
+                    row = [
+                        change['timestamp'],
+                        change['id_product'],
+                        change['reference'],
+                        change['meta_title'],
+                        change['id_manufacturer'],
+                        change['is_pack'],
+                        change['category_url'],
+                        change['price'],
+                        change['previous_price'],
+                        change['price_change'],
+                        change['stock_quantity'],
+                        change['previous_stock'],
+                        change['stock_change']
+                    ]
+                else:
+                    row = [
+                        change['timestamp'],
+                        change['id_product'],
+                        change['reference'],
+                        change['meta_title'],
+                        change['id_manufacturer'],
+                        change['is_pack'],
+                        change['category_url'],
+                        change.get('id_category_default', ''),
+                        change['price'],
+                        change['previous_price'],
+                        change['price_change'],
+                        change['stock_quantity'],
+                        change['previous_stock'],
+                        change['stock_change']
+                    ]
+
+                writer.writerow(row)
 
         group_type = "grouped" if grouped else "regular"
         logging.info(f"Appended {len(changes)} changes to {group_type} log file: {log_file}")
@@ -1317,8 +1353,14 @@ def analyze_changes_after_save(current_file_path, grouped=False):
         if changes:
             logging.info(f"Detected {len(changes)} {group_type} changes from previous day:")
             for change in changes:
-                logging.info(
-                    f"  ID: {change['id_product']}, Ref: {change['reference']}, Title: {change['meta_title']}, ID Manufacturer: {change['id_manufacturer']}, Pack: {change['is_pack']}, Category: {change['category_url']}")
+                log_msg = f"  ID: {change['id_product']}, Ref: {change['reference']}, Title: {change['meta_title']}, ID Manufacturer: {change['id_manufacturer']}, Pack: {change['is_pack']}, Category: {change['category_url']}"
+
+                # Add id_category_default to log for regular products
+                if not grouped and 'id_category_default' in change:
+                    log_msg += f", Category Default: {change['id_category_default']}"
+
+                logging.info(log_msg)
+
                 if change['price_change']:
                     logging.info(f"    Price: {change['previous_price']} -> {change['price']}")
                 if change['stock_change'] != 0:
@@ -1579,6 +1621,7 @@ def extract_product_details(session, product, grouped=False):
         quantity_all_versions = 0
         id_manufacturer = ""
         is_pack = "No"
+        id_category_default = ""  # Add this field for regular products
 
         # Extract meta title from page title
         title_tag = soup.find('title')
@@ -1597,6 +1640,7 @@ def extract_product_details(session, product, grouped=False):
                 price = product_json.get('price_amount', 0)
                 price_without_reduction = product_json.get('price_without_reduction', price)
                 id_manufacturer = product_json.get('id_manufacturer', '')
+                id_category_default = product_json.get('id_category_default', '')  # Extract id_category_default
 
                 if price_without_reduction and price:
                     discount_amount = float(price_without_reduction) - float(price)
@@ -1649,12 +1693,34 @@ def extract_product_details(session, product, grouped=False):
         if price_without_reduction and price and not discount_amount:
             discount_amount = float(price_without_reduction) - float(price)
 
+        # Try to extract id_category_default from other sources if not found in JSON
+        if not id_category_default:
+            # Look for breadcrumb or category information
+            breadcrumb = soup.select_one('.breadcrumb')
+            if breadcrumb:
+                category_links = breadcrumb.select('a')
+                for link in category_links:
+                    href = link.get('href', '')
+                    # Try to extract category ID from URL
+                    category_match = re.search(r'/(\d+)-', href)
+                    if category_match:
+                        id_category_default = category_match.group(1)
+                        break
+
+            # Alternative: look for category in URL patterns
+            if not id_category_default:
+                url_match = re.search(r'/(\d+)-', product['url'])
+                if url_match:
+                    # This might be the product ID, but we can try to find category info
+                    pass
+
         return {
             'id_product': product['id_product'],
             'reference': reference,
             'meta_title': meta_title,
             'id_manufacturer': id_manufacturer,
             'is_pack': is_pack,
+            'id_category_default': id_category_default,  # Add this field
             'url': product['url'],
             'category_url': product['category_url'],
             'price_without_reduction': round_float(price_without_reduction),
@@ -1685,11 +1751,23 @@ def save_current_data(current_products, grouped=False):
 
         with open(timestamped_file, 'w', newline='', encoding='utf-8') as f:
             if valid_products:
-                writer = csv.DictWriter(f, fieldnames=[
-                    'timestamp', 'id_product', 'reference', 'meta_title', 'id_manufacturer', 'is_pack', 'url', 'category_url',
-                    'price_without_reduction', 'discount_amount', 'price', 'available_date',
-                    'stock_quantity', 'quantity_all_versions'
-                ])
+                # Different fieldnames for grouped vs regular products
+                if grouped:
+                    fieldnames = [
+                        'timestamp', 'id_product', 'reference', 'meta_title', 'id_manufacturer', 'is_pack', 'url',
+                        'category_url',
+                        'price_without_reduction', 'discount_amount', 'price', 'available_date',
+                        'stock_quantity', 'quantity_all_versions'
+                    ]
+                else:
+                    fieldnames = [
+                        'timestamp', 'id_product', 'reference', 'meta_title', 'id_manufacturer', 'is_pack',
+                        'id_category_default', 'url', 'category_url',
+                        'price_without_reduction', 'discount_amount', 'price', 'available_date',
+                        'stock_quantity', 'quantity_all_versions'
+                    ]
+
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
 
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
