@@ -1027,6 +1027,8 @@ CATEGORY_URLS_GROUPED = [
 ]
 
 
+
+
 CATEGORY_URLS = list(set(CATEGORY_URLS))
 
 # Directory and output file
@@ -1173,17 +1175,22 @@ def compare_products(current, previous):
                     current_stock = int(product.get('stock_quantity', 0))
                     previous_stock = int(prev_product.get('stock_quantity', 0))
                     stock_changed = current_stock != previous_stock
+                    stock_change = previous_stock - current_stock
                 except (ValueError, TypeError) as e:
                     logging.warning(f"Error comparing stock for product {pid}: {e}")
                     stock_changed = False
                     current_stock = 0
                     previous_stock = 0
+                    stock_change = 0
 
                 if price_changed or stock_changed:
+                    transaction = "Vente" if stock_change > 0 else "Appro"
+                    ca = abs(stock_change) * current_price
+
                     change_data = {
                         'id_product': pid,
                         'reference': product.get('reference', ''),
-                        'meta_title': product.get('meta_title', ''),
+                        'product_title': product.get('product_title', ''),  # Changed from meta_title
                         'id_manufacturer': product.get('id_manufacturer', ''),
                         'is_pack': product.get('is_pack', 'No'),
                         'category_url': product.get('category_url', ''),
@@ -1192,7 +1199,9 @@ def compare_products(current, previous):
                         'stock_quantity': current_stock,
                         'previous_stock': previous_stock,
                         'price_change': price_changed,
-                        'stock_change': previous_stock - current_stock,
+                        'stock_change': stock_change,
+                        'transaction': transaction, 
+                        'ca': ca, 
                         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     }
 
@@ -1222,37 +1231,14 @@ def save_changes_log(changes, grouped=False):
         with open(log_file, 'a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
 
-            # Write separator and timestamp header
-            if file_exists:
-                writer.writerow([])  # Empty line for separation
-
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            writer.writerow([f'=== CHANGES DETECTED AT {current_time} ==='])
-
-            # Write column headers - different for grouped vs regular
-            if grouped:
-                headers = [
-                    'timestamp', 'id_product', 'reference', 'meta_title', 'id_manufacturer', 'is_pack', 'category_url',
-                    'price', 'previous_price', 'price_change',
-                    'stock_quantity', 'previous_stock', 'stock_change'
-                ]
-            else:
-                headers = [
-                    'timestamp', 'id_product', 'reference', 'meta_title', 'id_manufacturer', 'is_pack', 'category_url',
-                    'id_category_default', 'price', 'previous_price', 'price_change',
-                    'stock_quantity', 'previous_stock', 'stock_change'
-                ]
-
-            writer.writerow(headers)
-
-            # Write changes data
+            # Write changes data directly without headers or separators
             for change in changes:
                 if grouped:
                     row = [
                         change['timestamp'],
                         change['id_product'],
                         change['reference'],
-                        change['meta_title'],
+                        change['product_title'],  # Changed from meta_title
                         change['id_manufacturer'],
                         change['is_pack'],
                         change['category_url'],
@@ -1261,14 +1247,16 @@ def save_changes_log(changes, grouped=False):
                         change['price_change'],
                         change['stock_quantity'],
                         change['previous_stock'],
-                        change['stock_change']
+                        change['stock_change'],
+                        change['transaction'],  # New column
+                        change['ca']  # New column
                     ]
                 else:
                     row = [
                         change['timestamp'],
                         change['id_product'],
                         change['reference'],
-                        change['meta_title'],
+                        change['product_title'],  # Changed from meta_title
                         change['id_manufacturer'],
                         change['is_pack'],
                         change['category_url'],
@@ -1278,7 +1266,9 @@ def save_changes_log(changes, grouped=False):
                         change['price_change'],
                         change['stock_quantity'],
                         change['previous_stock'],
-                        change['stock_change']
+                        change['stock_change'],
+                        change['transaction'],  # New column
+                        change['ca']  # New column
                     ]
 
                 writer.writerow(row)
@@ -1298,10 +1288,6 @@ def save_no_changes_log(grouped=False):
     try:
         with open(log_file, 'a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-
-            # Write separator if file exists
-            if file_exists:
-                writer.writerow([])  # Empty line for separation
 
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             writer.writerow([f'{current_time} - No changes detected'])
@@ -1353,7 +1339,7 @@ def analyze_changes_after_save(current_file_path, grouped=False):
         if changes:
             logging.info(f"Detected {len(changes)} {group_type} changes from previous day:")
             for change in changes:
-                log_msg = f"  ID: {change['id_product']}, Ref: {change['reference']}, Title: {change['meta_title']}, ID Manufacturer: {change['id_manufacturer']}, Pack: {change['is_pack']}, Category: {change['category_url']}"
+                log_msg = f"  ID: {change['id_product']}, Ref: {change['reference']}, Title: {change['product_title']}, ID Manufacturer: {change['id_manufacturer']}, Pack: {change['is_pack']}, Category: {change['category_url']}"
 
                 # Add id_category_default to log for regular products
                 if not grouped and 'id_category_default' in change:
@@ -1502,7 +1488,7 @@ def extract_product_details_grouped(session, product):
 
         # Initialize default values
         reference = ""
-        meta_title = ""
+        product_title = ""  # Changed from meta_title
         price_without_reduction = 0
         discount_amount = 0
         price = 0
@@ -1512,10 +1498,10 @@ def extract_product_details_grouped(session, product):
         id_manufacturer = ""
         is_pack = "No"
 
-        # Extract meta title from page title
-        title_tag = soup.find('title')
-        if title_tag:
-            meta_title = title_tag.get_text(strip=True)
+        # Extract actual product title from h1 tag
+        title_h1 = soup.select_one('h1')
+        if title_h1:
+            product_title = title_h1.get_text(strip=True)
 
         # Look for the first script inside #main_section
         main_section = soup.select_one('#main_section')
@@ -1582,7 +1568,7 @@ def extract_product_details_grouped(session, product):
         return {
             'id_product': product['id_product'],
             'reference': reference,
-            'meta_title': meta_title,
+            'product_title': product_title,  # Changed from meta_title
             'id_manufacturer': id_manufacturer,
             'is_pack': is_pack,
             'url': product['url'],
@@ -1612,7 +1598,7 @@ def extract_product_details(session, product, grouped=False):
 
         # Initialize default values
         reference = ""
-        meta_title = ""
+        product_title = ""  # Changed from meta_title
         price_without_reduction = 0
         discount_amount = 0
         price = 0
@@ -1623,10 +1609,10 @@ def extract_product_details(session, product, grouped=False):
         is_pack = "No"
         id_category_default = ""  # Add this field for regular products
 
-        # Extract meta title from page title
-        title_tag = soup.find('title')
-        if title_tag:
-            meta_title = title_tag.get_text(strip=True)
+        # Extract actual product title from h1  tag
+        title_h1 = soup.select_one('h1')
+        if title_h1:
+            product_title = title_h1.get_text(strip=True)
 
         # Try to extract product details from JSON data
         product_details_elem = soup.select_one('#product-details')
@@ -1717,7 +1703,7 @@ def extract_product_details(session, product, grouped=False):
         return {
             'id_product': product['id_product'],
             'reference': reference,
-            'meta_title': meta_title,
+            'product_title': product_title,  # Changed from meta_title
             'id_manufacturer': id_manufacturer,
             'is_pack': is_pack,
             'id_category_default': id_category_default,  # Add this field
@@ -1754,14 +1740,14 @@ def save_current_data(current_products, grouped=False):
                 # Different fieldnames for grouped vs regular products
                 if grouped:
                     fieldnames = [
-                        'timestamp', 'id_product', 'reference', 'meta_title', 'id_manufacturer', 'is_pack', 'url',
+                        'timestamp', 'id_product', 'reference', 'product_title', 'id_manufacturer', 'is_pack', 'url',
                         'category_url',
                         'price_without_reduction', 'discount_amount', 'price', 'available_date',
                         'stock_quantity', 'quantity_all_versions'
                     ]
                 else:
                     fieldnames = [
-                        'timestamp', 'id_product', 'reference', 'meta_title', 'id_manufacturer', 'is_pack',
+                        'timestamp', 'id_product', 'reference', 'product_title', 'id_manufacturer', 'is_pack',
                         'id_category_default', 'url', 'category_url',
                         'price_without_reduction', 'discount_amount', 'price', 'available_date',
                         'stock_quantity', 'quantity_all_versions'
