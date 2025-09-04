@@ -11,8 +11,8 @@ import re
 import json
 import random
 import glob
+from urllib.parse import urljoin
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -22,15 +22,14 @@ logging.basicConfig(
     ]
 )
 
-# User-Agents for rotation
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
 ]
 
-# Base URL and categories for first website structure
 BASE_URL = 'https://www.minimx.fr/'
+
 CATEGORY_URLS = [
     'https://www.minimx.fr/amortisseurs-dirt-bike/1305-chaussette-d-amortisseur-320mm-monster.html',
     'https://www.minimx.fr/cale-pied-et-bequille/1005-cales-pieds-rouge-cnc-ycf-pour-dirt-bike-pit-bike.html',
@@ -1027,18 +1026,13 @@ CATEGORY_URLS_GROUPED = [
 ]
 
 
-
-
 CATEGORY_URLS = list(set(CATEGORY_URLS))
-
-# Directory and output file
 DATA_DIR = 'stock_data'
 CHANGES_LOG_FILE = 'stock_data/changes_log.csv'
 CHANGES_LOG_FILE_GROUPED = 'stock_data/changes_log_grouped.csv'
 
 
 def round_float(value, decimals=2):
-    """Round float value to specified decimal places"""
     try:
         return round(float(value), decimals)
     except (ValueError, TypeError):
@@ -1046,7 +1040,6 @@ def round_float(value, decimals=2):
 
 
 def get_headers():
-    """Generate headers to mimic a browser."""
     return {
         'User-Agent': random.choice(USER_AGENTS),
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -1058,12 +1051,10 @@ def get_headers():
 
 
 def setup_directories():
-    """Create directories for data if they don't exist."""
     os.makedirs(DATA_DIR, exist_ok=True)
 
 
 def get_timestamped_filename(date=None, grouped=False):
-    """Get filename with timestamp for products data"""
     if date is None:
         date = datetime.now()
     prefix = "wkx-racing_lebonquad_" if grouped else "minimx_"
@@ -1071,7 +1062,6 @@ def get_timestamped_filename(date=None, grouped=False):
 
 
 def get_daily_filename(date=None, grouped=False):
-    """Get daily filename pattern for finding files by date"""
     if date is None:
         date = datetime.now()
     prefix = "wkx-racing_lebonquad_" if grouped else "minimx_"
@@ -1079,13 +1069,10 @@ def get_daily_filename(date=None, grouped=False):
 
 
 def check_if_today_file_exists(grouped=False):
-    """Check if a file for today already exists"""
     today = datetime.now().date()
     pattern = get_daily_filename(today, grouped)
     files = glob.glob(pattern)
-
     if files:
-        # Sort files to get the most recent one
         files.sort(reverse=True)
         latest_file = files[0]
         group_type = "grouped" if grouped else "regular"
@@ -1098,18 +1085,15 @@ def check_if_today_file_exists(grouped=False):
 
 
 def find_file_by_date(target_date, grouped=False):
-    """Find the most recent file for a specific date"""
     pattern = get_daily_filename(target_date, grouped)
     files = glob.glob(pattern)
     if files:
-        # Return the most recent file for that date
         files.sort(reverse=True)
         return files[0]
     return None
 
 
 def load_products_from_csv(filename):
-    """Load products from CSV file with error handling"""
     if not filename or not os.path.exists(filename):
         logging.warning(f"File {filename} does not exist")
         return []
@@ -1128,18 +1112,15 @@ def load_products_from_csv(filename):
 
 
 def validate_product_data(product):
-    """Validate product data"""
     required_fields = ['id_product']
     return all(field in product and product[field] for field in required_fields)
 
 
 def compare_products(current, previous):
-    """Compare current products with previous data with improved error handling"""
     if not previous:
         logging.info("No previous data available for comparison")
         return []
 
-    # Create a dictionary from previous data with error handling
     prev_dict = {}
     for p in previous:
         if 'id_product' in p and p['id_product']:
@@ -1148,7 +1129,6 @@ def compare_products(current, previous):
             logging.warning(f"Skipping previous product with missing or empty id_product: {p}")
 
     changes = []
-
     for product in current:
         try:
             pid = product.get('id_product')
@@ -1159,7 +1139,6 @@ def compare_products(current, previous):
             if pid in prev_dict:
                 prev_product = prev_dict[pid]
 
-                # Safe price comparison
                 try:
                     current_price = round_float(product.get('price', 0))
                     previous_price = round_float(prev_product.get('price', 0))
@@ -1170,7 +1149,6 @@ def compare_products(current, previous):
                     current_price = 0
                     previous_price = 0
 
-                # Safe stock comparison
                 try:
                     current_stock = int(product.get('stock_quantity', 0))
                     previous_stock = int(prev_product.get('stock_quantity', 0))
@@ -1190,7 +1168,7 @@ def compare_products(current, previous):
                     change_data = {
                         'id_product': pid,
                         'reference': product.get('reference', ''),
-                        'product_title': product.get('product_title', ''),  # Changed from meta_title
+                        'product_title': product.get('product_title', ''),
                         'id_manufacturer': product.get('id_manufacturer', ''),
                         'is_pack': product.get('is_pack', 'No'),
                         'category_url': product.get('category_url', ''),
@@ -1200,16 +1178,16 @@ def compare_products(current, previous):
                         'previous_stock': previous_stock,
                         'price_change': price_changed,
                         'stock_change': stock_change,
-                        'transaction': transaction, 
-                        'ca': ca, 
+                        'transaction': transaction,
+                        'ca': ca,
                         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     }
 
-                    # Add id_category_default only for non-grouped products
                     if 'id_category_default' in product:
                         change_data['id_category_default'] = product.get('id_category_default', '')
 
                     changes.append(change_data)
+
         except Exception as e:
             logging.error(f"Error comparing product {product.get('id_product', 'unknown')}: {e}")
             continue
@@ -1218,27 +1196,21 @@ def compare_products(current, previous):
 
 
 def save_changes_log(changes, grouped=False):
-    """Append changes to the unified changes log file"""
     if not changes:
         return
 
     log_file = CHANGES_LOG_FILE_GROUPED if grouped else CHANGES_LOG_FILE
 
-    # Check if file exists to determine if we need to write header
-    file_exists = os.path.exists(log_file)
-
     try:
         with open(log_file, 'a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-
-            # Write changes data directly without headers or separators
             for change in changes:
                 if grouped:
                     row = [
                         change['timestamp'],
                         change['id_product'],
                         change['reference'],
-                        change['product_title'],  # Changed from meta_title
+                        change['product_title'],
                         change['id_manufacturer'],
                         change['is_pack'],
                         change['category_url'],
@@ -1248,70 +1220,60 @@ def save_changes_log(changes, grouped=False):
                         change['stock_quantity'],
                         change['previous_stock'],
                         change['stock_change'],
-                        change['transaction'],  # New column
-                        change['ca']  # New column
+                        change['transaction'],
+                        change['ca']
                     ]
                 else:
                     row = [
                         change['timestamp'],
                         change['id_product'],
                         change['reference'],
-                        change['product_title'],  # Changed from meta_title
+                        change['product_title'],
                         change['id_manufacturer'],
                         change['is_pack'],
-                        change['category_url'],
                         change.get('id_category_default', ''),
+                        change['category_url'],
                         change['price'],
                         change['previous_price'],
                         change['price_change'],
                         change['stock_quantity'],
                         change['previous_stock'],
                         change['stock_change'],
-                        change['transaction'],  # New column
-                        change['ca']  # New column
+                        change['transaction'],
+                        change['ca']
                     ]
-
                 writer.writerow(row)
 
         group_type = "grouped" if grouped else "regular"
         logging.info(f"Appended {len(changes)} changes to {group_type} log file: {log_file}")
-
     except Exception as e:
         logging.error(f"Error saving changes log: {e}")
 
 
 def save_no_changes_log(grouped=False):
-    """Append 'no changes' entry to the changes log"""
     log_file = CHANGES_LOG_FILE_GROUPED if grouped else CHANGES_LOG_FILE
-    file_exists = os.path.exists(log_file)
 
     try:
         with open(log_file, 'a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             writer.writerow([f'{current_time} - No changes detected'])
 
         group_type = "grouped" if grouped else "regular"
         logging.info(f"Recorded 'no changes' entry in {group_type} log file: {log_file}")
-
     except Exception as e:
         logging.error(f"Error saving no changes log: {e}")
 
 
 def analyze_changes_after_save(current_file_path, grouped=False):
-    """Analyze changes by comparing current file with previous day's file"""
     try:
-        # Get current date from the filename or use today
         current_date = datetime.now().date()
         previous_date = current_date - timedelta(days=1)
 
         group_type = "grouped" if grouped else "regular"
         logging.info(f"Looking for {group_type} comparison files - Current: {current_date}, Previous: {previous_date}")
 
-        # Find previous day's file
         previous_file = find_file_by_date(previous_date, grouped)
-
         if not previous_file:
             logging.info(f"No {group_type} file found for previous date {previous_date}. Skipping comparison.")
             save_no_changes_log(grouped)
@@ -1319,7 +1281,6 @@ def analyze_changes_after_save(current_file_path, grouped=False):
 
         logging.info(f"Comparing {group_type} files: {current_file_path} vs {previous_file}")
 
-        # Load data from both files
         current_products = load_products_from_csv(current_file_path)
         previous_products = load_products_from_csv(previous_file)
 
@@ -1332,27 +1293,26 @@ def analyze_changes_after_save(current_file_path, grouped=False):
             save_no_changes_log(grouped)
             return
 
-        # Compare products and find changes
         changes = compare_products(current_products, previous_products)
 
-        # Log the results
         if changes:
             logging.info(f"Detected {len(changes)} {group_type} changes from previous day:")
             for change in changes:
-                log_msg = f"  ID: {change['id_product']}, Ref: {change['reference']}, Title: {change['product_title']}, ID Manufacturer: {change['id_manufacturer']}, Pack: {change['is_pack']}, Category: {change['category_url']}"
-
-                # Add id_category_default to log for regular products
+                log_msg = (
+                    f"  ID: {change['id_product']}, Ref: {change['reference']}, "
+                    f"Title: {change['product_title']}, ID Manufacturer: {change['id_manufacturer']}, "
+                    f"Pack: {change['is_pack']}, Category: {change['category_url']}"
+                )
                 if not grouped and 'id_category_default' in change:
                     log_msg += f", Category Default: {change['id_category_default']}"
-
                 logging.info(log_msg)
 
                 if change['price_change']:
                     logging.info(f"    Price: {change['previous_price']} -> {change['price']}")
                 if change['stock_change'] != 0:
                     logging.info(
-                        f"    Stock change: {change['stock_change']} (was: {change['previous_stock']}, now: {change['stock_quantity']})")
-
+                        f"    Stock change: {change['stock_change']} (was: {change['previous_stock']}, now: {change['stock_quantity']})"
+                    )
             save_changes_log(changes, grouped)
         else:
             logging.info(f"No {group_type} changes detected from previous day")
@@ -1362,8 +1322,38 @@ def analyze_changes_after_save(current_file_path, grouped=False):
         logging.error(f"Error during {group_type} change analysis: {e}")
 
 
+def extract_manufacturer_logo_url(item, response_url):
+    """Extract manufacturer logo URL from .logomarque element"""
+    try:
+        brand_img = item.select_one('.logomarque')
+        if not brand_img:
+            return ""
+
+        # Try to get the image source URL
+        brand_src = brand_img.get('src') or brand_img.get('data-src')
+
+        # If no src, try srcset attribute
+        if not brand_src:
+            srcset = brand_img.get('srcset')
+            if srcset:
+                # Take the first URL from srcset
+                brand_src = srcset.split()[0]
+
+        # Convert relative URL to absolute URL if needed
+        if brand_src:
+            brand_src = urljoin(response_url, brand_src)
+            logging.debug(f"Extracted manufacturer logo URL: {brand_src}")
+            return brand_src
+
+        logging.debug("No manufacturer logo found in .logomarque")
+        return ""
+
+    except Exception as e:
+        logging.warning(f"Error extracting manufacturer logo: {e}")
+        return ""
+
+
 def get_product_links(session, category_url, grouped=False):
-    """Extract product links from a category page, handling pagination."""
     product_links = []
     page = 1
     max_pages = 20
@@ -1371,31 +1361,83 @@ def get_product_links(session, category_url, grouped=False):
 
     while page <= max_pages:
         url = f"{category_url}?page={page}" if page > 1 else category_url
+
         try:
             group_type = "grouped" if grouped else "regular"
             logging.info(f"Fetching {group_type} page {page} of {category_url}")
+
             response = session.get(url, headers=get_headers())
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
             if grouped:
-                # For grouped categories, use different selectors
                 products_container = soup.select_one('#product_list')
                 if not products_container:
                     logging.info(f"No products container found on page {page} of {category_url}")
                     break
 
-                products = products_container.select('.ajax_block_product h3 a')
-                logging.info(products)
-            else:
-                # Original logic for regular categories
-                products_container = soup.select_one('#products')
-                if not products_container:
-                    logging.info(f"No products container found on page {page} of {category_url}")
+                items = products_container.select('.ajax_block_product')
+                current_page_products = set()
+                current_page_links = []
+
+                for item in items:
+                    a = item.select_one('h3 a')
+                    if not a:
+                        continue
+
+                    href = a.get('href')
+                    if not href or 'index.php' in href:
+                        continue
+
+                    product_id_match = re.search(r'/(\d+)-', href)
+                    product_id = product_id_match.group(1) if product_id_match else None
+                    if not product_id:
+                        continue
+
+                    # Extract manufacturer logo URL
+                    brand_logo_url = extract_manufacturer_logo_url(item, response.url)
+
+                    current_page_products.add(product_id)
+                    entry = {
+                        'url': href,
+                        'id_product': product_id,
+                        'category_url': category_url,
+                        'id_manufacturer': brand_logo_url  # Store the logo URL in id_manufacturer field
+                    }
+                    current_page_links.append(entry)
+
+                if not current_page_links:
+                    logging.info(f"No more products found on page {page} of {category_url}")
                     break
 
-                products = products_container.select('a.product-thumbnail')
+                if current_page_products and current_page_products == previous_page_products:
+                    logging.warning(
+                        f"Detected duplicate products on page {page} of {category_url}, breaking pagination loop")
+                    break
 
+                product_links.extend(current_page_links)
+                previous_page_products = current_page_products
+                logging.info(f"Found {len(current_page_links)} products on page {page} of {category_url}")
+
+                # Check for next page
+                pagination = soup.select_one('.pagination')
+                if pagination:
+                    next_disabled = pagination.select_one('.next.disabled') or not pagination.select_one('.next')
+                    if next_disabled:
+                        logging.info(f"Reached last page ({page}) for {category_url}")
+                        break
+
+                page += 1
+                time.sleep(3)
+                continue
+
+            # Regular (non-grouped) processing
+            products_container = soup.select_one('#products')
+            if not products_container:
+                logging.info(f"No products container found on page {page} of {category_url}")
+                break
+
+            products = products_container.select('a.product-thumbnail')
             if not products:
                 logging.info(f"No more products found on page {page} of {category_url}")
                 break
@@ -1428,7 +1470,8 @@ def get_product_links(session, category_url, grouped=False):
                 break
 
             if page > 1 and len(current_page_products) == len(previous_page_products) and all(
-                    pid in previous_page_products for pid in current_page_products):
+                    pid in previous_page_products for pid in current_page_products
+            ):
                 logging.warning(
                     f"Page {page} appears to contain the same products as previous page for {category_url}, stopping pagination")
                 break
@@ -1439,10 +1482,11 @@ def get_product_links(session, category_url, grouped=False):
 
             product_links.extend(current_page_links)
             previous_page_products = current_page_products
-
             logging.info(f"Found {len(current_page_links)} products on page {page} of {category_url}")
+
             page += 1
             time.sleep(3)
+
         except requests.RequestException as e:
             logging.error(f"Error fetching category page {url}: {e}")
             break
@@ -1455,7 +1499,6 @@ def get_product_links(session, category_url, grouped=False):
 
 
 def get_all_products(session, grouped=False):
-    """Get all product links by scanning category pages."""
     all_products = []
     category_urls = CATEGORY_URLS_GROUPED if grouped else CATEGORY_URLS
 
@@ -1466,7 +1509,7 @@ def get_all_products(session, grouped=False):
         all_products.extend(products)
         time.sleep(3)
 
-    # Remove duplicates based on product ID
+    # Remove duplicates
     seen_ids = set()
     unique_products = []
     for product in all_products:
@@ -1480,30 +1523,29 @@ def get_all_products(session, grouped=False):
 
 
 def extract_product_details_grouped(session, product):
-    """Extract detailed product information for grouped categories (lebonquad.com structure)"""
     try:
         response = session.get(product['url'], headers=get_headers())
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Initialize default values
+        # Initialize variables
         reference = ""
-        product_title = ""  # Changed from meta_title
+        product_title = ""
         price_without_reduction = 0
         discount_amount = 0
         price = 0
         available_date = ""
         stock_quantity = 0
         quantity_all_versions = 0
-        id_manufacturer = ""
+        id_manufacturer = product.get('id_manufacturer', '')  # This now contains the logo URL
         is_pack = "No"
 
-        # Extract actual product title from h1 tag
+        # Extract product title
         title_h1 = soup.select_one('h1')
         if title_h1:
             product_title = title_h1.get_text(strip=True)
 
-        # Look for the first script inside #main_section
+        # Extract product details from JavaScript
         main_section = soup.select_one('#main_section')
         if main_section:
             scripts = main_section.find_all('script', type='text/javascript')
@@ -1511,12 +1553,11 @@ def extract_product_details_grouped(session, product):
                 if script.string and 'id_product' in script.string:
                     script_content = script.string
 
-                    # Extract product ID
+                    # Verify this is the correct product
                     id_match = re.search(r"var id_product = '(\d+)';", script_content)
                     if id_match:
                         extracted_id = id_match.group(1)
                         if extracted_id == product['id_product']:
-
                             # Extract reference
                             ref_match = re.search(r"var productReference = '([^']+)';", script_content)
                             if ref_match:
@@ -1542,34 +1583,25 @@ def extract_product_details_grouped(session, product):
                             if price_without_reduction and price:
                                 discount_amount = price_without_reduction - price
 
-                            # Extract reduction price if available
+                            # Check for specific reduction price
                             reduction_match = re.search(r"var reduction_price = (\d+);", script_content)
                             if reduction_match:
                                 reduction_price = float(reduction_match.group(1))
                                 if reduction_price > 0:
                                     discount_amount = reduction_price
 
-                            # Extract id_manufacturer
-                            manufacturer_match = re.search(r"var id_manufacturer = '?(\d+)'?;", script_content)
-                            if manufacturer_match:
-                                id_manufacturer = manufacturer_match.group(1)
-
-                            # Extract available date (if needed in the future)
-                            # For now, we'll leave it empty as it's not clearly defined in the script
-
-                            # Check if it's a pack (based on available information)
-                            # For now, we'll check if there's any pack-related information
-                            pack_elements = soup.select('.pack-info, .product-pack')
-                            if pack_elements:
-                                is_pack = "Yes"
-
                             break
+
+        # Check if product is a pack
+        pack_elements = soup.select('.pack-info, .product-pack')
+        if pack_elements:
+            is_pack = "Yes"
 
         return {
             'id_product': product['id_product'],
             'reference': reference,
-            'product_title': product_title,  # Changed from meta_title
-            'id_manufacturer': id_manufacturer,
+            'product_title': product_title,
+            'id_manufacturer': id_manufacturer,  # Logo URL
             'is_pack': is_pack,
             'url': product['url'],
             'category_url': product['category_url'],
@@ -1587,7 +1619,6 @@ def extract_product_details_grouped(session, product):
 
 
 def extract_product_details(session, product, grouped=False):
-    """Extract detailed product information from product page."""
     if grouped:
         return extract_product_details_grouped(session, product)
 
@@ -1596,9 +1627,9 @@ def extract_product_details(session, product, grouped=False):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Initialize default values
+        # Initialize variables
         reference = ""
-        product_title = ""  # Changed from meta_title
+        product_title = ""
         price_without_reduction = 0
         discount_amount = 0
         price = 0
@@ -1607,26 +1638,25 @@ def extract_product_details(session, product, grouped=False):
         quantity_all_versions = 0
         id_manufacturer = ""
         is_pack = "No"
-        id_category_default = ""  # Add this field for regular products
+        id_category_default = ""
 
-        # Extract actual product title from h1  tag
+        # Extract product title
         title_h1 = soup.select_one('h1')
         if title_h1:
             product_title = title_h1.get_text(strip=True)
 
-        # Try to extract product details from JSON data
+        # Extract product details from JSON data
         product_details_elem = soup.select_one('#product-details')
         if product_details_elem and 'data-product' in product_details_elem.attrs:
             try:
                 product_json = json.loads(product_details_elem['data-product'])
-
                 reference = product_json.get('reference', '')
                 stock_quantity = product_json.get('quantity', 0)
                 quantity_all_versions = product_json.get('quantity_all_versions', 0)
                 price = product_json.get('price_amount', 0)
                 price_without_reduction = product_json.get('price_without_reduction', price)
                 id_manufacturer = product_json.get('id_manufacturer', '')
-                id_category_default = product_json.get('id_category_default', '')  # Extract id_category_default
+                id_category_default = product_json.get('id_category_default', '')
 
                 if price_without_reduction and price:
                     discount_amount = float(price_without_reduction) - float(price)
@@ -1634,15 +1664,13 @@ def extract_product_details(session, product, grouped=False):
                     discount_amount = 0
 
                 available_date = product_json.get('available_date', '')
-
-                # Extract pack status
                 pack_status = product_json.get('pack', 0)
                 is_pack = "Yes" if pack_status == 1 else "No"
 
             except (json.JSONDecodeError, KeyError) as json_err:
                 logging.error(f"Error parsing product JSON for {product['url']}: {json_err}")
 
-        # Alternative extraction methods if JSON parsing fails
+        # Fallback extraction methods if JSON parsing failed
         if not reference:
             ref_elem = soup.select_one('[data-product-reference]')
             if ref_elem:
@@ -1679,34 +1707,25 @@ def extract_product_details(session, product, grouped=False):
         if price_without_reduction and price and not discount_amount:
             discount_amount = float(price_without_reduction) - float(price)
 
-        # Try to extract id_category_default from other sources if not found in JSON
+        # Extract category from breadcrumb if not found
         if not id_category_default:
-            # Look for breadcrumb or category information
             breadcrumb = soup.select_one('.breadcrumb')
             if breadcrumb:
                 category_links = breadcrumb.select('a')
                 for link in category_links:
                     href = link.get('href', '')
-                    # Try to extract category ID from URL
                     category_match = re.search(r'/(\d+)-', href)
                     if category_match:
                         id_category_default = category_match.group(1)
                         break
 
-            # Alternative: look for category in URL patterns
-            if not id_category_default:
-                url_match = re.search(r'/(\d+)-', product['url'])
-                if url_match:
-                    # This might be the product ID, but we can try to find category info
-                    pass
-
         return {
             'id_product': product['id_product'],
             'reference': reference,
-            'product_title': product_title,  # Changed from meta_title
+            'product_title': product_title,
             'id_manufacturer': id_manufacturer,
             'is_pack': is_pack,
-            'id_category_default': id_category_default,  # Add this field
+            'id_category_default': id_category_default,
             'url': product['url'],
             'category_url': product['category_url'],
             'price_without_reduction': round_float(price_without_reduction),
@@ -1723,11 +1742,10 @@ def extract_product_details(session, product, grouped=False):
 
 
 def save_current_data(current_products, grouped=False):
-    """Save current products to timestamped file with validation"""
     timestamped_file = get_timestamped_filename(grouped=grouped)
 
     try:
-        # Validate products before saving
+        # Filter valid products
         valid_products = []
         for product in current_products:
             if validate_product_data(product):
@@ -1737,20 +1755,17 @@ def save_current_data(current_products, grouped=False):
 
         with open(timestamped_file, 'w', newline='', encoding='utf-8') as f:
             if valid_products:
-                # Different fieldnames for grouped vs regular products
                 if grouped:
                     fieldnames = [
-                        'timestamp', 'id_product', 'reference', 'product_title', 'id_manufacturer', 'is_pack', 'url',
-                        'category_url',
-                        'price_without_reduction', 'discount_amount', 'price', 'available_date',
-                        'stock_quantity', 'quantity_all_versions'
+                        'timestamp', 'id_product', 'reference', 'product_title', 'id_manufacturer',
+                        'is_pack', 'url', 'category_url', 'price_without_reduction', 'discount_amount',
+                        'price', 'available_date', 'stock_quantity', 'quantity_all_versions'
                     ]
                 else:
                     fieldnames = [
-                        'timestamp', 'id_product', 'reference', 'product_title', 'id_manufacturer', 'is_pack',
-                        'id_category_default', 'url', 'category_url',
-                        'price_without_reduction', 'discount_amount', 'price', 'available_date',
-                        'stock_quantity', 'quantity_all_versions'
+                        'timestamp', 'id_product', 'reference', 'product_title', 'id_manufacturer',
+                        'is_pack', 'id_category_default', 'url', 'category_url', 'price_without_reduction',
+                        'discount_amount', 'price', 'available_date', 'stock_quantity', 'quantity_all_versions'
                     ]
 
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -1764,7 +1779,7 @@ def save_current_data(current_products, grouped=False):
 
         group_type = "grouped" if grouped else "regular"
         logging.info(f"Saved {len(valid_products)} valid {group_type} products to {timestamped_file}")
-        return timestamped_file  # Return the filename for further processing
+        return timestamped_file
 
     except Exception as e:
         logging.error(f"Error saving current data: {e}")
@@ -1772,12 +1787,11 @@ def save_current_data(current_products, grouped=False):
 
 
 def run_monitor_for_group(grouped=False):
-    """Run monitoring for a specific group (regular or grouped)"""
     group_type = "grouped" if grouped else "regular"
     logging.info(f"Starting {group_type} monitoring cycle...")
 
+    # Check if today's file already exists
     file_exists, existing_file = check_if_today_file_exists(grouped)
-
     if file_exists:
         logging.info(f"{group_type.capitalize()} file for today already exists: {existing_file}")
         logging.info(f"Skipping {group_type} scraping for today - file already created")
@@ -1786,33 +1800,28 @@ def run_monitor_for_group(grouped=False):
     logging.info(f"No {group_type} file found for today - proceeding with scraping...")
 
     session = requests.Session()
-
-    # Get all products for this group
     products = get_all_products(session, grouped)
+
     if not products:
         logging.error(f"No {group_type} products found!")
         return
 
     logging.info(f"Found {len(products)} unique {group_type} products to process")
 
-    # Extract details for all products
     current_products = []
     for product in products:
         logging.info(f"Processing {group_type} product: {product['id_product']}")
         details = extract_product_details(session, product, grouped)
         if details:
             current_products.append(details)
-        time.sleep(2)  # Be nice to the server
+        time.sleep(2)
 
     logging.info(f"Successfully processed {len(current_products)} {group_type} products")
 
-    # Save current products to timestamped file
+    # Save current data
     current_file_path = save_current_data(current_products, grouped)
-
     if current_file_path:
         logging.info(f"{group_type.capitalize()} products saved to: {current_file_path}")
-
-        # Analyze changes after saving the current data
         logging.info(f"Starting {group_type} change analysis...")
         analyze_changes_after_save(current_file_path, grouped)
     else:
@@ -1822,17 +1831,16 @@ def run_monitor_for_group(grouped=False):
 
 
 def run_monitor():
-    """Daily monitoring function with file existence check for both groups"""
     logging.info("Starting daily monitoring cycle for all groups...")
 
-    # Run monitoring for regular categories (CATEGORY_URLS)
+    # Process regular categories (minimx.fr structure)
     if CATEGORY_URLS:
         logging.info("=" * 50)
         logging.info("PROCESSING REGULAR CATEGORIES (minimx.fr structure)")
         logging.info("=" * 50)
         run_monitor_for_group(grouped=False)
 
-    # Run monitoring for grouped categories (CATEGORY_URLS_GROUPED)
+    # Process grouped categories (lebonquad.com structure)
     if CATEGORY_URLS_GROUPED:
         logging.info("=" * 50)
         logging.info("PROCESSING GROUPED CATEGORIES (lebonquad.com structure)")
@@ -1843,15 +1851,12 @@ def run_monitor():
 
 
 def calculate_next_run_time():
-    """Calculate next 00:00 run time"""
     now = datetime.now()
-    # Next midnight (tomorrow 00:00)
     next_run = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     return next_run
 
 
 def wait_until_next_run():
-    """Wait until next scheduled run time"""
     next_run = calculate_next_run_time()
     wait_seconds = (next_run - datetime.now()).total_seconds()
 
@@ -1862,25 +1867,23 @@ def wait_until_next_run():
 
 
 def main():
-    """Main function"""
     setup_directories()
+
     logging.info("Starting daily product monitor (runs at 00:00 each day)")
     logging.info(f"Regular categories: {len(CATEGORY_URLS)} URLs")
     logging.info(f"Grouped categories: {len(CATEGORY_URLS_GROUPED)} URLs")
 
-    # Run immediately on startup
+    # Run initial monitoring cycle
     logging.info("Running initial monitoring cycle...")
     run_monitor()
 
-    # Schedule daily runs at 00:00
+    # Set up daily scheduler
     schedule.every().day.at("00:00").do(run_monitor)
     logging.info("Daily scheduler set up. Will run every day at 00:00")
 
+    # Keep the script running
     while True:
-        # Check for scheduled runs
         schedule.run_pending()
-
-        # Sleep for 30 seconds and check again
         time.sleep(30)
 
 
